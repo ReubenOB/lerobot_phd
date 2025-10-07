@@ -93,7 +93,8 @@ def patch_setPacketTimeout(self, packet_length):  # noqa: N802
     patching.
     """
     self.packet_start_time = self.getCurrentTime()
-    self.packet_timeout = (self.tx_time_per_byte * packet_length) + (self.tx_time_per_byte * 3.0) + 50
+    self.packet_timeout = (self.tx_time_per_byte * packet_length) + \
+        (self.tx_time_per_byte * 3.0) + 50
 
 
 class FeetechMotorsBus(MotorsBus):
@@ -137,7 +138,8 @@ class FeetechMotorsBus(MotorsBus):
         self._no_error = 0x00
 
         if any(MODEL_PROTOCOL[model] != self.protocol_version for model in self.models):
-            raise ValueError(f"Some motors are incompatible with protocol_version={self.protocol_version}")
+            raise ValueError(
+                f"Some motors are incompatible with protocol_version={self.protocol_version}")
 
     def _assert_same_protocol(self) -> None:
         if any(MODEL_PROTOCOL[model] != self.protocol_version for model in self.models):
@@ -193,7 +195,8 @@ class FeetechMotorsBus(MotorsBus):
                     )
                 return baudrate, found_id
 
-        raise RuntimeError(f"Motor '{motor}' (model '{model}') was not found. Make sure it is connected.")
+        raise RuntimeError(
+            f"Motor '{motor}' (model '{model}') was not found. Make sure it is connected.")
 
     def _find_single_motor_p1(self, motor: str, initial_baudrate: int | None = None) -> tuple[int, int]:
         import scservo_sdk as scs
@@ -217,17 +220,27 @@ class FeetechMotorsBus(MotorsBus):
                         )
                     return baudrate, id_
 
-        raise RuntimeError(f"Motor '{motor}' (model '{model}') was not found. Make sure it is connected.")
+        raise RuntimeError(
+            f"Motor '{motor}' (model '{model}') was not found. Make sure it is connected.")
 
-    def configure_motors(self, return_delay_time=0, maximum_acceleration=254, acceleration=254) -> None:
-        for motor in self.motors:
+    def configure_motors(self, return_delay_time=0, maximum_acceleration=254, acceleration=254, max_torque=1000, torque=1000) -> None:
+        for motor_name, motor_obj in self.motors.items():
             # By default, Feetech motors have a 500µs delay response time (corresponding to a value of 250 on
             # the 'Return_Delay_Time' address). We ensure this is reduced to the minimum of 2µs (value of 0).
-            self.write("Return_Delay_Time", motor, return_delay_time)
+            self.write("Return_Delay_Time", motor_name, return_delay_time)
             # Set 'Maximum_Acceleration' to 254 to speedup acceleration and deceleration of the motors.
             if self.protocol_version == 0:
-                self.write("Maximum_Acceleration", motor, maximum_acceleration)
-            self.write("Acceleration", motor, acceleration)
+                self.write("Maximum_Acceleration", motor_name, maximum_acceleration)
+            self.write("Acceleration", motor_name, acceleration)
+
+            # Set lower torque for gripper motor specifically
+            if motor_name == "gripper":
+                gripper_torque = max_torque // 1  # Half the torque for gripper
+                self.write("Max_Torque_Limit", motor_name, gripper_torque)
+                self.write("Torque_Limit", motor_name, gripper_torque)
+            else:
+                self.write("Max_Torque_Limit", motor_name, max_torque)
+                self.write("Torque_Limit", motor_name, torque)
 
     @property
     def is_calibrated(self) -> bool:
@@ -255,7 +268,8 @@ class FeetechMotorsBus(MotorsBus):
             mins[motor] = self.read("Min_Position_Limit", motor, normalize=False)
             maxes[motor] = self.read("Max_Position_Limit", motor, normalize=False)
             offsets[motor] = (
-                self.read("Homing_Offset", motor, normalize=False) if self.protocol_version == 0 else 0
+                self.read("Homing_Offset", motor,
+                          normalize=False) if self.protocol_version == 0 else 0
             )
 
         calibration = {}
@@ -356,7 +370,8 @@ class FeetechMotorsBus(MotorsBus):
             return data_list, result
 
         # set rx timeout
-        self.port_handler.setPacketTimeoutMillis((wait_length * tx_time_per_byte) + (3.0 * scs.MAX_ID) + 16.0)
+        self.port_handler.setPacketTimeoutMillis(
+            (wait_length * tx_time_per_byte) + (3.0 * scs.MAX_ID) + 16.0)
 
         rxpacket = []
         while not self.port_handler.isPacketTimeout() and rx_length < wait_length:
@@ -419,8 +434,10 @@ class FeetechMotorsBus(MotorsBus):
 
         ids_errors = {id_: status for id_, status in ids_status.items() if self._is_error(status)}
         if ids_errors:
-            display_dict = {id_: self.packet_handler.getRxPacketError(err) for id_, err in ids_errors.items()}
-            logger.error(f"Some motors found returned an error status:\n{pformat(display_dict, indent=4)}")
+            display_dict = {id_: self.packet_handler.getRxPacketError(
+                err) for id_, err in ids_errors.items()}
+            logger.error(
+                f"Some motors found returned an error status:\n{pformat(display_dict, indent=4)}")
 
         return self._read_model_number(list(ids_status), raise_on_error)
 
