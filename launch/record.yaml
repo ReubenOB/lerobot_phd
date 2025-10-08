@@ -1,0 +1,32 @@
+robot:
+  type: so101_follower
+  port: /dev/ttyACM1
+  id: follower_12v_v1
+  cameras:
+    front:
+      type: opencv
+      index_or_path: 2
+      width: 640
+      height: 480
+      fps: 30
+    wrist:
+      type: opencv
+      index_or_path: 7
+      width: 640
+      height: 480
+      fps: 30
+
+teleop:
+  type: so101_leader
+  port: /dev/ttyACM0
+  id: leader_6v_v1
+
+dataset:
+  episode_time_s: 25
+  reset_time_s: 5
+  private: true
+
+display_data: true
+
+#lerobot-record   --config_path=record_eval.yaml   --dataset.single_task="another_task"   
+# --dataset.repo_id="RAPOB/x"  --dataset.num_episode=20

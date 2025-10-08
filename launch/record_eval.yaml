@@ -27,3 +27,5 @@ dataset:
   private: true
 
 display_data: true
+
+#lerobot-record   --config_path=record_eval.yaml   --dataset.single_task="another_task"   --dataset.repo_id="RAPOB/x"   --policy.path="RAPOB/x" --dataset.num_episode=1
