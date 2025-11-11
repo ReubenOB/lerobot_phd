@@ -15,14 +15,20 @@
 import abc
 import builtins
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import draccus
+from pydantic import BaseModel, Field
 
 from lerobot.motors import MotorCalibration
 from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
-from .config import RobotConfig
+
+class RobotConfig(BaseModel):
+    calibration_dir: Path | None = Field(
+        default=Path.home() / "lerobot_ros2_ws" / "lerobot" / "calibration_s101",
+        description="Path to the directory containing calibration files. Defaults to workspace calibration directory.",
+    )
 
 
 # TODO(aliberts): action/obs typing such as Generic[ObsType, ActType] similar to gym.Env ?
@@ -46,9 +52,13 @@ class Robot(abc.ABC):
     def __init__(self, config: RobotConfig):
         self.robot_type = self.name
         self.id = config.id
-        self.calibration_dir = (
-            config.calibration_dir if config.calibration_dir else HF_LEROBOT_CALIBRATION / ROBOTS / self.name
-        )
+
+        # If custom calibration_dir is provided, use it directly without appending robot name
+        if config.calibration_dir:
+            self.calibration_dir = config.calibration_dir / self.name
+        else:
+            self.calibration_dir = HF_LEROBOT_CALIBRATION / ROBOTS / self.name
+
         self.calibration_dir.mkdir(parents=True, exist_ok=True)
         self.calibration_fpath = self.calibration_dir / f"{self.id}.json"
         self.calibration: dict[str, MotorCalibration] = {}

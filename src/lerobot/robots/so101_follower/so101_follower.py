@@ -33,6 +33,13 @@ from .config_so101_follower import SO101FollowerConfig
 
 logger = logging.getLogger(__name__)
 
+# Try to import ROS2 publisher
+try:
+    from lerobot.common.robot_devices.ros2_publisher import LeRobotROS2Publisher
+    ROS2_AVAILABLE = True
+except ImportError:
+    ROS2_AVAILABLE = False
+
 
 class SO101Follower(Robot):
     """
@@ -59,6 +66,20 @@ class SO101Follower(Robot):
             calibration=self.calibration,
         )
         self.cameras = make_cameras_from_configs(config.cameras)
+
+        # Initialize ROS2 publisher automatically if ROS2 is available
+        self.ros2_publisher = None
+        if ROS2_AVAILABLE:
+            try:
+                # Use motor names from the bus for joint names
+                joint_names = [f"{motor}.pos" for motor in self.bus.motors]
+                self.ros2_publisher = LeRobotROS2Publisher(
+                    node_name=f'lerobot_so101_follower_{self.id}',
+                    joint_names=joint_names
+                )
+                logger.info("[LeRobot] ROS2 publisher enabled for SO101Follower")
+            except Exception as e:
+                logger.warning(f"[LeRobot] ROS2 publisher failed to initialize: {e}")
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -114,7 +135,8 @@ class SO101Follower(Robot):
                 f"Press ENTER to use provided calibration file associated with the id {self.id}, or type 'c' and press ENTER to run calibration: "
             )
             if user_input.strip().lower() != "c":
-                logger.info(f"Writing calibration file associated with the id {self.id} to the motors")
+                logger.info(
+                    f"Writing calibration file associated with the id {self.id} to the motors")
                 self.bus.write_calibration(self.calibration)
                 return
 
@@ -188,6 +210,10 @@ class SO101Follower(Robot):
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
+        # Publish to ROS2 if enabled
+        if self.ros2_publisher:
+            self.ros2_publisher.publish_joint_states(obs_dict)
+
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
@@ -206,7 +232,8 @@ class SO101Follower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        goal_pos = {key.removesuffix(".pos"): val for key, val in action.items() if key.endswith(".pos")}
+        goal_pos = {key.removesuffix(".pos"): val for key,
+                    val in action.items() if key.endswith(".pos")}
 
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.
@@ -222,6 +249,10 @@ class SO101Follower(Robot):
     def disconnect(self):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Shutdown ROS2 publisher first
+        if self.ros2_publisher:
+            self.ros2_publisher.shutdown()
 
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
