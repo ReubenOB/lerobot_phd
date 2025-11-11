@@ -78,8 +78,13 @@ class LeRobotROS2Publisher:
 
             for joint_name in self.joint_names:
                 if joint_name in observation:
-                    msg.name.append(joint_name)
-                    msg.position.append(float(observation[joint_name]))
+                    # Strip .pos suffix from joint names for ROS2 compatibility
+                    clean_joint_name = joint_name.replace('.pos', '')
+                    msg.name.append(clean_joint_name)
+
+                    # Convert from degrees to radians for ROS2
+                    position_rad = float(observation[joint_name]) * (3.14159265359 / 180.0)
+                    msg.position.append(position_rad)
                     msg.velocity.append(0.0)
                     msg.effort.append(0.0)
 
