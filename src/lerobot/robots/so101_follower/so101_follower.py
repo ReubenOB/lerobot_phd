@@ -73,9 +73,12 @@ class SO101Follower(Robot):
             try:
                 # Use motor names from the bus for joint names
                 joint_names = [f"{motor}.pos" for motor in self.bus.motors]
+                # Get camera names from config
+                camera_names = list(config.cameras.keys()) if config.cameras else []
                 self.ros2_publisher = LeRobotROS2Publisher(
                     node_name=f'lerobot_so101_follower_{self.id}',
-                    joint_names=joint_names
+                    joint_names=joint_names,
+                    camera_names=camera_names
                 )
                 logger.info("[LeRobot] ROS2 publisher enabled for SO101Follower")
             except Exception as e:
@@ -213,6 +216,7 @@ class SO101Follower(Robot):
         # Publish to ROS2 if enabled
         if self.ros2_publisher:
             self.ros2_publisher.publish_joint_states(obs_dict)
+            self.ros2_publisher.publish_images(obs_dict)
 
         return obs_dict
 
