@@ -33,9 +33,9 @@ from .config_so101_follower import SO101FollowerConfig
 
 logger = logging.getLogger(__name__)
 
-# Try to import ROS2 publisher
+# Try to import ROS2 bridge
 try:
-    from lerobot.common.robot_devices.ros2_publisher import LeRobotROS2Publisher
+    from lerobot.common.robot_devices.ros2_bridge import LeRobotROS2Bridge
     ROS2_AVAILABLE = True
 except ImportError:
     ROS2_AVAILABLE = False
@@ -67,22 +67,30 @@ class SO101Follower(Robot):
         )
         self.cameras = make_cameras_from_configs(config.cameras)
 
-        # Initialize ROS2 publisher automatically if ROS2 is available
-        self.ros2_publisher = None
+        # Initialize ROS2 bridge automatically if ROS2 is available
+        self.ros2_bridge = None
         if ROS2_AVAILABLE:
             try:
                 # Use motor names from the bus for joint names
                 joint_names = [f"{motor}.pos" for motor in self.bus.motors]
                 # Get camera names from config
                 camera_names = list(config.cameras.keys()) if config.cameras else []
-                self.ros2_publisher = LeRobotROS2Publisher(
+
+                # Check which cameras are ROS2 subscribers
+                subscribe_to_cameras = {}
+                for cam_name, cam_config in config.cameras.items():
+                    if cam_config.type == 'ros2':
+                        subscribe_to_cameras[cam_name] = cam_config.topic_name
+
+                self.ros2_bridge = LeRobotROS2Bridge(
                     node_name=f'lerobot_so101_follower_{self.id}',
                     joint_names=joint_names,
-                    camera_names=camera_names
+                    camera_names=camera_names,
+                    subscribe_to_cameras=subscribe_to_cameras
                 )
-                logger.info("[LeRobot] ROS2 publisher enabled for SO101Follower")
+                logger.info("[LeRobot] ROS2 bridge enabled for SO101Follower")
             except Exception as e:
-                logger.warning(f"[LeRobot] ROS2 publisher failed to initialize: {e}")
+                logger.warning(f"[LeRobot] ROS2 bridge failed to initialize: {e}")
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -202,14 +210,25 @@ class SO101Follower(Robot):
         # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
+
+            # Check if this is a ROS2 camera - get frame from bridge instead
+            if hasattr(cam, 'config') and cam.config.type == 'ros2':
+                if self.ros2_bridge:
+                    frame = self.ros2_bridge.get_camera_frame(cam_key)
+                    if frame is not None:
+                        obs_dict[cam_key] = frame
+                    else:
+                        logger.warning(f"No frame available for ROS2 camera {cam_key}")
+            else:
+                obs_dict[cam_key] = cam.async_read()
+
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
         # Publish to ROS2 if enabled
-        if self.ros2_publisher:
-            self.ros2_publisher.publish_joint_states(obs_dict)
-            self.ros2_publisher.publish_images(obs_dict)
+        if self.ros2_bridge:
+            self.ros2_bridge.publish_joint_states(obs_dict)
+            self.ros2_bridge.publish_images(obs_dict)
 
         return obs_dict
 
@@ -247,9 +266,9 @@ class SO101Follower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
-        # Shutdown ROS2 publisher first
-        if self.ros2_publisher:
-            self.ros2_publisher.shutdown()
+        # Shutdown ROS2 bridge first
+        if self.ros2_bridge:
+            self.ros2_bridge.shutdown()
 
         self.bus.disconnect(self.config.disable_torque_on_disconnect)
         for cam in self.cameras.values():
