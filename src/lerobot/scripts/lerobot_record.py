@@ -70,6 +70,7 @@ from lerobot.cameras import (  # noqa: F401
 )
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
 from lerobot.cameras.realsense.configuration_realsense import RealSenseCameraConfig  # noqa: F401
+from lerobot.cameras.ros2.configuration_ros2 import ROS2CameraConfig  # noqa: F401
 from lerobot.configs import parser
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.image_writer import safe_stop_image_writer
@@ -258,7 +259,8 @@ def record_loop(
     display_data: bool = False,
 ):
     if dataset is not None and dataset.fps != fps:
-        raise ValueError(f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
+        raise ValueError(
+            f"The dataset fps should be equal to requested fps ({dataset.fps} != {fps}).")
 
     teleop_arm = teleop_keyboard = None
     if isinstance(teleop, list):
@@ -302,7 +304,8 @@ def record_loop(
         obs_processed = robot_observation_processor(obs)
 
         if policy is not None or dataset is not None:
-            observation_frame = build_dataset_frame(dataset.features, obs_processed, prefix=OBS_STR)
+            observation_frame = build_dataset_frame(
+                dataset.features, observation, prefix="observation")
 
         # Get action from either policy or teleop
         if policy is not None and preprocessor is not None and postprocessor is not None:
@@ -379,22 +382,10 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
     robot = make_robot_from_config(cfg.robot)
     teleop = make_teleoperator_from_config(cfg.teleop) if cfg.teleop is not None else None
 
-    teleop_action_processor, robot_action_processor, robot_observation_processor = make_default_processors()
-
-    dataset_features = combine_feature_dicts(
-        aggregate_pipeline_dataset_features(
-            pipeline=teleop_action_processor,
-            initial_features=create_initial_features(
-                action=robot.action_features
-            ),  # TODO(steven, pepijn): in future this should be come from teleop or policy
-            use_videos=cfg.dataset.video,
-        ),
-        aggregate_pipeline_dataset_features(
-            pipeline=robot_observation_processor,
-            initial_features=create_initial_features(observation=robot.observation_features),
-            use_videos=cfg.dataset.video,
-        ),
-    )
+    action_features = hw_to_dataset_features(robot.action_features, "action", cfg.dataset.video)
+    obs_features = hw_to_dataset_features(
+        robot.observation_features, "observation", cfg.dataset.video)
+    dataset_features = {**action_features, **obs_features}
 
     if cfg.resume:
         dataset = LeRobotDataset(
@@ -420,7 +411,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             features=dataset_features,
             use_videos=cfg.dataset.video,
             image_writer_processes=cfg.dataset.num_image_writer_processes,
-            image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera * len(robot.cameras),
+            image_writer_threads=cfg.dataset.num_image_writer_threads_per_camera *
+            len(robot.cameras),
             batch_encoding_size=cfg.dataset.video_encoding_batch_size,
         )
 
