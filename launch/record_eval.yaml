@@ -1,25 +1,41 @@
 robot:
   type: so101_follower
-  port: /dev/ttyACM1
-  id: follower_12v_v1
+  port: /dev/ttyACM2
+  id: fol_gla_1
   cameras:
-    front:
-      type: opencv
-      index_or_path: 2
+
+  # OpenCV camera configurations
+  #   front:
+  #     type: opencv
+  #     index_or_path: 2
+  #     width: 640
+  #     height: 480
+  #     fps: 30
+  #   wrist:
+  #     type: opencv
+  #     index_or_path: 7
+  #     width: 640
+  #     height: 480
+  #     fps: 30
+
+  # ROS2 camera configurations
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
       width: 640
       height: 480
       fps: 30
     wrist:
-      type: opencv
-      index_or_path: 7
+      type: ros2
+      topic_name: /camera/wrist/image_raw
       width: 640
       height: 480
       fps: 30
 
 teleop:
   type: so101_leader
-  port: /dev/ttyACM0
-  id: leader_6v_v1
+  port: /dev/ttyACM3
+  id: lea_gla_1
 
 dataset:
   episode_time_s: 480

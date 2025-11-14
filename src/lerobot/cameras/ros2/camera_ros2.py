@@ -136,8 +136,4 @@ class ROS2Camera(Camera):
             return
 
         self._connected = False
-
-        if self.node is not None:
-            self.node.destroy_node()
-
         logger.info(f"ROS2Camera disconnected from {self.topic_name}")
