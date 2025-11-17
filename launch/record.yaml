@@ -36,10 +36,10 @@ teleop:
   id: lea_gla_1
 
 dataset:
-  episode_time_s: 30
+  episode_time_s: 20
   reset_time_s: 5
   private: true
 
 display_data: true
 
-#lerobot-record   --config_path=record_eval.yaml   --dataset.single_task="another_task"  --dataset.repo_id="RAPOB/x"  --dataset.num_episode=20
+#lerobot-record   --config_path=record.yaml   --dataset.single_task="another_task"  --dataset.repo_id="RAPOB/x"  --dataset.num_episode=20
