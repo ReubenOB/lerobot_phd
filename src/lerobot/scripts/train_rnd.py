@@ -206,10 +206,17 @@ def train_rnd(
     logger.info(f"Starting RND training for {num_epochs} epochs")
     rnd.train_on_dataset(dataloader, num_epochs=num_epochs)
 
-    # Save trained RND
-    rnd_path = output_dir / "rnd_model.pth"
-    rnd.save(rnd_path)
-    logger.info(f"RND model saved to {rnd_path}")
+    # Save trained RND model
+    output_path = output_dir / 'rnd_model.pth'
+    torch.save({
+        'predictor_state_dict': rnd.predictor.state_dict(),
+        'target_state_dict': rnd.target.state_dict(),
+        'resnet_state_dict': rnd.resnet.state_dict(),  # Save ResNet backbone
+        'state_dim': state_dim,
+        'action_dim': action_dim,
+        'image_size': tuple(image_size),
+    }, output_path)
+    logger.info(f"RND model saved to {output_path}")
 
     # Save training info
     info = {
