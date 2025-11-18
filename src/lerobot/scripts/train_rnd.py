@@ -192,6 +192,18 @@ def train_rnd(
         device=str(device),
     )
 
+    # Log the ResNet feature dimension
+    with torch.no_grad():
+        dummy_img = torch.zeros(1, 3, *image_size).to(device)
+        resnet_feat = resnet(dummy_img)
+        if isinstance(resnet_feat, dict):
+            resnet_feat = resnet_feat.get('out', list(resnet_feat.values())[-1])
+        elif isinstance(resnet_feat, (list, tuple)):
+            resnet_feat = resnet_feat[0]
+        resnet_dim = resnet_feat.flatten(1).shape[1]
+        logger.info(f"ResNet feature dimension: {resnet_dim}")
+        logger.info(f"Total RND input dimension: {resnet_dim + state_dim + action_dim}")
+
     # Create dataloader
     rnd_dataset = RNDDataset(lerobot_dataset)
     dataloader = DataLoader(
@@ -208,13 +220,40 @@ def train_rnd(
 
     # Save trained RND model
     output_path = output_dir / 'rnd_model.pth'
+    
+    # Compute uncertainty statistics on training data for threshold calibration
+    logger.info("Computing uncertainty statistics on training data for threshold calibration...")
+    all_uncertainties = []
+    rnd.eval()
+    
+    with torch.no_grad():
+        for batch_idx, (obs_img, obs_state, act) in enumerate(dataloader):
+            if batch_idx >= 100:  # Sample 100 batches for statistics
+                break
+            obs_img = obs_img.to(device)
+            obs_state = obs_state.to(device)
+            act = act.to(device)
+            
+            step_unc, _ = rnd.compute_uncertainty(obs_img, obs_state, act, normalize=False)
+            all_uncertainties.append(step_unc)
+    
+    uncertainty_mean = float(np.mean(all_uncertainties))
+    uncertainty_std = float(np.std(all_uncertainties))
+    uncertainty_threshold = uncertainty_mean + 2.0 * uncertainty_std  # 95th percentile
+    
+    logger.info(f"Training data uncertainty - Mean: {uncertainty_mean:.4f}, Std: {uncertainty_std:.4f}")
+    logger.info(f"Recommended threshold (mean + 2*std): {uncertainty_threshold:.4f}")
+    
     torch.save({
         'predictor_state_dict': rnd.predictor.state_dict(),
         'target_state_dict': rnd.target.state_dict(),
-        'resnet_state_dict': rnd.resnet.state_dict(),  # Save ResNet backbone
+        'resnet_model': resnet,  # Save the entire ResNet model, not just state_dict
         'state_dim': state_dim,
         'action_dim': action_dim,
         'image_size': tuple(image_size),
+        'uncertainty_mean': uncertainty_mean,
+        'uncertainty_std': uncertainty_std,
+        'uncertainty_threshold': uncertainty_threshold,
     }, output_path)
     logger.info(f"RND model saved to {output_path}")
 

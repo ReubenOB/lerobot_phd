@@ -1,6 +1,6 @@
 robot:
   type: so101_follower
-  port: /dev/ttyACM2
+  port: /dev/ttyACM1
   id: fol_gla_1
   cameras:
 
@@ -34,11 +34,11 @@ robot:
 
 teleop:
   type: so101_leader
-  port: /dev/ttyACM3
+  port: /dev/ttyACM2
   id: lea_gla_1
 
 dataset:
-  episode_time_s: 480
+  episode_time_s: 600
   reset_time_s: 10
   private: true
 
