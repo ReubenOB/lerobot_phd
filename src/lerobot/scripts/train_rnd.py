@@ -41,6 +41,7 @@ import argparse
 import logging
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as transforms
@@ -220,12 +221,12 @@ def train_rnd(
 
     # Save trained RND model
     output_path = output_dir / 'rnd_model.pth'
-    
+
     # Compute uncertainty statistics on training data for threshold calibration
     logger.info("Computing uncertainty statistics on training data for threshold calibration...")
     all_uncertainties = []
     rnd.eval()
-    
+
     with torch.no_grad():
         for batch_idx, (obs_img, obs_state, act) in enumerate(dataloader):
             if batch_idx >= 100:  # Sample 100 batches for statistics
@@ -233,17 +234,19 @@ def train_rnd(
             obs_img = obs_img.to(device)
             obs_state = obs_state.to(device)
             act = act.to(device)
-            
+
+            # Use normalize=False to get raw uncertainty values
             step_unc, _ = rnd.compute_uncertainty(obs_img, obs_state, act, normalize=False)
             all_uncertainties.append(step_unc)
-    
+
     uncertainty_mean = float(np.mean(all_uncertainties))
     uncertainty_std = float(np.std(all_uncertainties))
     uncertainty_threshold = uncertainty_mean + 2.0 * uncertainty_std  # 95th percentile
-    
-    logger.info(f"Training data uncertainty - Mean: {uncertainty_mean:.4f}, Std: {uncertainty_std:.4f}")
+
+    logger.info(
+        f"Training data uncertainty (raw) - Mean: {uncertainty_mean:.4f}, Std: {uncertainty_std:.4f}")
     logger.info(f"Recommended threshold (mean + 2*std): {uncertainty_threshold:.4f}")
-    
+
     torch.save({
         'predictor_state_dict': rnd.predictor.state_dict(),
         'target_state_dict': rnd.target.state_dict(),

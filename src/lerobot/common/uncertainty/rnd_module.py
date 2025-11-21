@@ -149,8 +149,6 @@ class RNDModule(nn.Module):
         self.train()
         print(f"[RND] Training for {num_epochs} epochs on {len(dataloader)} batches...")
 
-        all_uncertainties = []
-
         for epoch in range(num_epochs):
             total_loss = 0.0
             batch_count = 0
@@ -180,11 +178,6 @@ class RNDModule(nn.Module):
                 total_loss += loss.item()
                 batch_count += 1
 
-                # Collect uncertainties for normalization
-                with torch.no_grad():
-                    err = torch.sum((y_target - y_pred) ** 2, dim=1)
-                    all_uncertainties.extend(err.cpu().numpy())
-
                 # Print progress every 100 batches
                 if batch_count % 100 == 0:
                     avg_loss_so_far = total_loss / batch_count
@@ -194,7 +187,25 @@ class RNDModule(nn.Module):
             avg_loss = total_loss / len(dataloader)
             print(f"Epoch [{epoch+1}/{num_epochs}] COMPLETE - Avg Loss: {avg_loss:.6f}")
 
-        # Compute normalization statistics
+        # Compute normalization statistics on final training batch
+        # DO NOT compute during training loop as that would include untrained predictions
+        print("[RND] Computing final uncertainty statistics...")
+        all_uncertainties = []
+
+        with torch.no_grad():
+            for obs_img, obs_state, act in dataloader:
+                obs_img = obs_img.to(self.device)
+                obs_state = obs_state.to(self.device)
+                act = act.to(self.device)
+
+                x = self.encode_inputs(obs_img, obs_state, act)
+                y_target = self.target(x)
+                y_pred = self.predictor(x)
+
+                # Compute per-sample L2 error (same as compute_uncertainty)
+                err = torch.sum((y_target - y_pred) ** 2, dim=1)
+                all_uncertainties.extend(err.cpu().numpy())
+
         if all_uncertainties:
             import numpy as np
             all_uncertainties = np.array(all_uncertainties)
@@ -211,7 +222,7 @@ class RNDModule(nn.Module):
         obs_img: torch.Tensor,
         obs_state: torch.Tensor,
         action: torch.Tensor,
-        normalize: bool = True
+        normalize: bool = False  # Change default to False for consistency
     ) -> Tuple[float, float]:
         """
         Computes per-timestep RND novelty score and rolling average.
@@ -220,7 +231,7 @@ class RNDModule(nn.Module):
             obs_img: Tensor [B, 3, H, W]
             obs_state: Tensor [B, state_dim]
             action: Tensor [B, action_dim]
-            normalize: Whether to normalize uncertainty using training stats
+            normalize: Whether to normalize uncertainty using training stats (default: False)
 
         Returns:
             - step_uncertainty: per-timestep scalar novelty (mean across batch)
@@ -240,7 +251,7 @@ class RNDModule(nn.Module):
         err = torch.sum((y_target - y_pred) ** 2, dim=1)
         step_uncertainty = err.mean().item()
 
-        # Normalize if requested
+        # Normalize if requested (only if normalization stats are available)
         if normalize and self.uncertainty_std > 0:
             step_uncertainty = (step_uncertainty - self.uncertainty_mean.item()
                                 ) / self.uncertainty_std.item()
