@@ -252,7 +252,7 @@ class RNDModule(nn.Module):
         step_uncertainty = err.mean().item()
 
         # Normalize if requested (only if normalization stats are available)
-        if normalize and self.uncertainty_std > 0:
+        if normalize and self.uncertainty_std > 1e-6:
             step_uncertainty = (step_uncertainty - self.uncertainty_mean.item()
                                 ) / self.uncertainty_std.item()
 
