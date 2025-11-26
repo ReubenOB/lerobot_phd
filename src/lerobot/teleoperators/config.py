@@ -24,7 +24,7 @@ class TeleoperatorConfig(draccus.ChoiceRegistry, abc.ABC):
     # Allows to distinguish between different teleoperators of the same type
     id: str | None = None
     # Directory to store calibration file
-    calibration_dir: Path | None = Path.home() / "lerobot_ros2_ws" / "lerobot" / "calibration_s101"
+    calibration_dir: Path | None = Path.home() / "vigil_ws" / "src" / "deps" / "lerobot_phd" / "calibration_s101"
 
     @property
     def type(self) -> str:
