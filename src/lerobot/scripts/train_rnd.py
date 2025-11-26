@@ -115,7 +115,7 @@ class RNDDataset(torch.utils.data.Dataset):
         if self.camera_key:
             image = item[self.camera_key]
         else:
-            raise ValueError("No camera keys found in dataset")
+            raise KeyError("No camera keys found in dataset")
 
         # Extract state (joint positions)
         state_keys = [k for k in item.keys() if 'state' in k and 'action' not in k]
@@ -127,14 +127,14 @@ class RNDDataset(torch.utils.data.Dataset):
             if state_keys:
                 state = torch.cat([item[k] for k in state_keys])
             else:
-                raise ValueError("Could not find state in dataset")
+                raise KeyError("Could not find state in dataset")
 
         # Extract action
         action_keys = [k for k in item.keys() if 'action' in k]
         if action_keys:
             action = item[action_keys[0]]
         else:
-            raise ValueError("Could not find action in dataset")
+            raise KeyError("Could not find action in dataset")
 
         return image, state, action
 
