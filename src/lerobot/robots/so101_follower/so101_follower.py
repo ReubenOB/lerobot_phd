@@ -86,7 +86,8 @@ class SO101Follower(Robot):
                     node_name=f'lerobot_so101_follower_{self.id}',
                     joint_names=joint_names,
                     camera_names=camera_names,
-                    subscribe_to_cameras=subscribe_to_cameras
+                    subscribe_to_cameras=subscribe_to_cameras,
+                    send_action_callback=self._ros2_send_action,
                 )
                 logger.info("[LeRobot] ROS2 bridge enabled for SO101Follower")
             except Exception as e:
@@ -200,9 +201,33 @@ class SO101Follower(Robot):
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
 
+        # Skip reading if trajectory is executing (to avoid bus conflicts)
+        if self.ros2_bridge and self.ros2_bridge.trajectory_executing:
+            # Return cached observation or empty dict to avoid bus conflict
+            if hasattr(self, '_last_observation'):
+                return self._last_observation
+            return {}
+
+        # Use lock if available to prevent concurrent bus access
+        if self.ros2_bridge and hasattr(self.ros2_bridge, 'bus_lock'):
+            lock = self.ros2_bridge.bus_lock
+        else:
+            lock = None
+
         # Read arm position
         start = time.perf_counter()
-        obs_dict = self.bus.sync_read("Present_Position")
+        try:
+            if lock:
+                with lock:
+                    obs_dict = self.bus.sync_read("Present_Position")
+            else:
+                obs_dict = self.bus.sync_read("Present_Position")
+        except Exception as e:
+            logger.warning(f"Failed to read observation: {e}")
+            if hasattr(self, '_last_observation'):
+                return self._last_observation
+            return {}
+            
         obs_dict = {f"{motor}.pos": val for motor, val in obs_dict.items()}
         dt_ms = (time.perf_counter() - start) * 1e3
         logger.debug(f"{self} read state: {dt_ms:.1f}ms")
@@ -225,8 +250,11 @@ class SO101Follower(Robot):
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
 
-        # Publish to ROS2 if enabled
-        if self.ros2_bridge:
+        # Cache the observation for use during trajectory execution
+        self._last_observation = obs_dict.copy()
+
+        # Publish to ROS2 if enabled (but not during trajectory execution)
+        if self.ros2_bridge and not self.ros2_bridge.trajectory_executing:
             self.ros2_bridge.publish_joint_states(obs_dict)
             self.ros2_bridge.publish_images(obs_dict)
 
@@ -261,6 +289,17 @@ class SO101Follower(Robot):
         # Send goal position to the arm
         self.bus.sync_write("Goal_Position", goal_pos)
         return {f"{motor}.pos": val for motor, val in goal_pos.items()}
+
+    def _ros2_send_action(self, action: dict[str, Any]) -> None:
+        """Callback for ROS2 bridge to send actions to the robot.
+        
+        This is called by the ROS2 bridge when MoveIt sends trajectory commands.
+        """
+        try:
+            if self.is_connected:
+                self.send_action(action)
+        except Exception as e:
+            logger.error(f"[LeRobot] Failed to execute ROS2 action: {e}")
 
     def disconnect(self):
         if not self.is_connected:
