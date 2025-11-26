@@ -30,7 +30,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from collections import deque
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple
 
 
 class RNDNetwork(nn.Module):
