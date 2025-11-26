@@ -57,14 +57,22 @@ logger = logging.getLogger(__name__)
 
 
 def make_image_transforms(image_size: tuple[int, int]) -> transforms.Compose:
-    """Create image transforms matching those used during policy training."""
-    return transforms.Compose(
-        [
-            transforms.ToImage(),
-            transforms.Resize(image_size, antialias=True),
-            transforms.ToDtype(torch.float32, scale=True),
-        ]
-    )
+    """Create image transforms matching those used during policy training.
+
+    Args:
+        image_size: A tuple of (height, width) specifying the target image dimensions.
+
+    Returns:
+        transforms.Compose: A composition of image transformations that:
+            - Converts the input to a tensor image
+            - Resizes to the specified dimensions with antialiasing
+            - Converts to float32 and scales pixel values to [0, 1]
+    """
+    return transforms.Compose([
+        transforms.ToImage(),
+        transforms.Resize(image_size, antialias=True),
+        transforms.ToDtype(torch.float32, scale=True),
+    ])
 
 
 def load_policy_backbone(policy_path: str | Path, device: str) -> tuple[torch.nn.Module, PreTrainedConfig]:
