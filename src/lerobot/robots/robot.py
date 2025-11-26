@@ -26,10 +26,9 @@ from lerobot.motors import MotorCalibration
 
 class RobotConfig(BaseModel):
     calibration_dir: Path | None = Field(
-        default=Path.home() / "lerobot_ros2_ws" / "lerobot" / "calibration_s101",
+        default=Path.home() / "vigil_ws" / "src" / "deps" / "lerobot_phd" / "calibration_s101",
         description="Path to the directory containing calibration files. Defaults to workspace calibration directory.",
     )
-
 
 # TODO(aliberts): action/obs typing such as Generic[ObsType, ActType] similar to gym.Env ?
 # https://github.com/Farama-Foundation/Gymnasium/blob/3287c869f9a48d99454306b0d4b4ec537f0f35e3/gymnasium/core.py#L23
