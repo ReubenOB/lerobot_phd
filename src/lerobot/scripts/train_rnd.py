@@ -38,6 +38,7 @@ Usage with HuggingFace policy:
 """
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -286,8 +287,6 @@ def train_rnd(
         "batch_size": batch_size,
         "learning_rate": learning_rate,
     }
-    import json
-
     with open(output_dir / "training_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
