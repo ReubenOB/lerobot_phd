@@ -38,6 +38,7 @@ Usage with HuggingFace policy:
 """
 
 import argparse
+import json
 import logging
 from pathlib import Path
 
@@ -46,10 +47,10 @@ import torch
 from torch.utils.data import DataLoader
 from torchvision.transforms import v2 as transforms
 
+from lerobot.common.uncertainty import RNDModule
+from lerobot.configs.policies import PreTrainedConfig
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
 from lerobot.policies.factory import make_policy
-from lerobot.configs.policies import PreTrainedConfig
-from lerobot.common.uncertainty import RNDModule
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -99,11 +100,9 @@ def load_policy_backbone(policy_path: str | Path, device: str) -> tuple[torch.nn
 
     # Create a minimal dataset metadata for policy initialization
     # This is needed because make_policy expects dataset metadata
-    from lerobot.datasets.lerobot_dataset import LeRobotDatasetMetadata
-
-    # We'll load the actual dataset later, but need minimal meta for policy creation
-    temp_dataset = LeRobotDataset(policy_config.dataset_repo_id if hasattr(
-        policy_config, 'dataset_repo_id') else "lerobot/pusht")
+    # Use the explicitly provided dataset_repo_id to ensure dimensions match
+    logger.info(f"Loading dataset metadata from {dataset_repo_id}")
+    temp_dataset = LeRobotDataset(dataset_repo_id)
 
     # Load the full policy using make_policy (same as record.py)
     policy = make_policy(policy_config, ds_meta=temp_dataset.meta)
@@ -111,9 +110,9 @@ def load_policy_backbone(policy_path: str | Path, device: str) -> tuple[torch.nn
     policy.eval()
 
     # Extract ResNet encoder - ACT policies have it in different places
-    if hasattr(policy, 'model') and hasattr(policy.model, 'backbone'):
+    if hasattr(policy, "model") and hasattr(policy.model, "backbone"):
         resnet = policy.model.backbone
-    elif hasattr(policy, 'backbone'):
+    elif hasattr(policy, "backbone"):
         resnet = policy.backbone
     else:
         raise AttributeError("Could not find ResNet backbone in policy")
@@ -144,19 +143,19 @@ class RNDDataset(torch.utils.data.Dataset):
             raise KeyError("No camera keys found in dataset")
 
         # Extract state (joint positions)
-        state_keys = [k for k in item.keys() if 'state' in k and 'action' not in k]
+        state_keys = [k for k in item.keys() if "state" in k and "action" not in k]
         if state_keys:
             state = item[state_keys[0]]
         else:
             # Fallback: try to find position-related keys
-            state_keys = [k for k in item.keys() if 'pos' in k or 'position' in k]
+            state_keys = [k for k in item.keys() if "pos" in k or "position" in k]
             if state_keys:
                 state = torch.cat([item[k] for k in state_keys])
             else:
                 raise KeyError("Could not find state in dataset")
 
         # Extract action
-        action_keys = [k for k in item.keys() if 'action' in k]
+        action_keys = [k for k in item.keys() if "action" in k]
         if action_keys:
             action = item[action_keys[0]]
         else:
@@ -183,7 +182,7 @@ def train_rnd(
     logger.info(f"Using device: {device}")
 
     # Load policy backbone (same way as record.py)
-    resnet, policy_config = load_policy_backbone(policy_path, device)
+    resnet, policy_config = load_policy_backbone(policy_path, dataset_repo_id, device)
 
     # Load dataset
     logger.info(f"Loading dataset: {dataset_repo_id}")
@@ -195,14 +194,14 @@ def train_rnd(
 
     # Determine dimensions from dataset
     sample = lerobot_dataset[0]
-    state_keys = [k for k in sample.keys() if 'state' in k and 'action' not in k]
-    action_keys = [k for k in sample.keys() if 'action' in k]
+    state_keys = [k for k in sample.keys() if "state" in k and "action" not in k]
+    action_keys = [k for k in sample.keys() if "action" in k]
 
     if state_keys:
         state_dim = sample[state_keys[0]].shape[0]
     else:
         # Fallback
-        state_keys = [k for k in sample.keys() if 'pos' in k or 'position' in k]
+        state_keys = [k for k in sample.keys() if "pos" in k or "position" in k]
         state_dim = sum(sample[k].shape[0] for k in state_keys)
 
     action_dim = sample[action_keys[0]].shape[0]
@@ -224,7 +223,7 @@ def train_rnd(
         dummy_img = torch.zeros(1, 3, *image_size).to(device)
         resnet_feat = resnet(dummy_img)
         if isinstance(resnet_feat, dict):
-            resnet_feat = resnet_feat.get('out', list(resnet_feat.values())[-1])
+            resnet_feat = resnet_feat.get("out", list(resnet_feat.values())[-1])
         elif isinstance(resnet_feat, (list, tuple)):
             resnet_feat = resnet_feat[0]
         resnet_dim = resnet_feat.flatten(1).shape[1]
@@ -246,7 +245,7 @@ def train_rnd(
     rnd.train_on_dataset(dataloader, num_epochs=num_epochs)
 
     # Save trained RND model
-    output_path = output_dir / 'rnd_model.pth'
+    output_path = output_dir / "rnd_model.pth"
 
     # Compute uncertainty statistics on training data for threshold calibration
     logger.info("Computing uncertainty statistics on training data for threshold calibration...")
@@ -269,28 +268,30 @@ def train_rnd(
     uncertainty_std = float(np.std(all_uncertainties))
     uncertainty_threshold = uncertainty_mean + 2.0 * uncertainty_std  # 95th percentile
 
-    logger.info(
-        f"Training data uncertainty (raw) - Mean: {uncertainty_mean:.4f}, Std: {uncertainty_std:.4f}")
+    logger.info(f"Training data uncertainty (raw) - Mean: {uncertainty_mean:.4f}, Std: {uncertainty_std:.4f}")
     logger.info(f"Recommended threshold (mean + 2*std): {uncertainty_threshold:.4f}")
 
-    torch.save({
-        'predictor_state_dict': rnd.predictor.state_dict(),
-        'target_state_dict': rnd.target.state_dict(),
-        'resnet_model': resnet,  # Save the entire ResNet model, not just state_dict
-        'state_dim': state_dim,
-        'action_dim': action_dim,
-        'image_size': tuple(image_size),
-        'uncertainty_mean': uncertainty_mean,
-        'uncertainty_std': uncertainty_std,
-        'uncertainty_threshold': uncertainty_threshold,
-    }, output_path)
+    torch.save(
+        {
+            "predictor_state_dict": rnd.predictor.state_dict(),
+            "target_state_dict": rnd.target.state_dict(),
+            "resnet_model": resnet,  # Save the entire ResNet model, not just state_dict
+            "state_dim": state_dim,
+            "action_dim": action_dim,
+            "image_size": tuple(image_size),
+            "uncertainty_mean": uncertainty_mean,
+            "uncertainty_std": uncertainty_std,
+            "uncertainty_threshold": uncertainty_threshold,
+        },
+        output_path,
+    )
     logger.info(f"RND model saved to {output_path}")
 
     # Save training info
     info = {
         "dataset_repo_id": dataset_repo_id,
         "policy_path": str(policy_path),
-        "policy_type": policy_config.type if hasattr(policy_config, 'type') else "unknown",
+        "policy_type": policy_config.type if hasattr(policy_config, "type") else "unknown",
         "state_dim": state_dim,
         "action_dim": action_dim,
         "image_size": image_size,
@@ -298,7 +299,6 @@ def train_rnd(
         "batch_size": batch_size,
         "learning_rate": learning_rate,
     }
-    import json
     with open(output_dir / "training_info.json", "w") as f:
         json.dump(info, f, indent=2)
 
