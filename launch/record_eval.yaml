@@ -4,7 +4,7 @@ robot:
   id: fol_gla_1
   cameras:
 
-  # OpenCV camera configurations
+  #  OpenCV camera configurations
   #   front:
   #     type: opencv
   #     index_or_path: 2
