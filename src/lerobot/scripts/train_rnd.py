@@ -57,29 +57,41 @@ logger = logging.getLogger(__name__)
 
 
 def make_image_transforms(image_size: tuple[int, int]) -> transforms.Compose:
-    """Create image transforms matching those used during policy training."""
-    return transforms.Compose(
-        [
-            transforms.ToImage(),
-            transforms.Resize(image_size, antialias=True),
-            transforms.ToDtype(torch.float32, scale=True),
-        ]
-    )
-
-
-def load_policy_backbone(
-    policy_path: str | Path, dataset_repo_id: str, device: str
-) -> tuple[torch.nn.Module, PreTrainedConfig]:
-    """Load the ResNet backbone from a trained policy (local or HuggingFace).
+    """Create image transforms matching those used during policy training.
 
     Args:
-        policy_path: Path to the trained policy (local directory or HuggingFace repo)
-        dataset_repo_id: Dataset repo ID to use for loading metadata (must match the dataset
-                        the policy was trained on to avoid dimension mismatches)
-        device: Device to load the policy on
+        image_size: A tuple of (height, width) specifying the target image dimensions.
 
     Returns:
-        Tuple of (resnet_backbone, policy_config)
+        transforms.Compose: A composition of image transformations that:
+            - Converts the input to a tensor image
+            - Resizes to the specified dimensions with antialiasing
+            - Converts to float32 and scales pixel values to [0, 1]
+    """
+    return transforms.Compose([
+        transforms.ToImage(),
+        transforms.Resize(image_size, antialias=True),
+        transforms.ToDtype(torch.float32, scale=True),
+    ])
+
+
+def load_policy_backbone(policy_path: str | Path, device: str) -> tuple[torch.nn.Module, PreTrainedConfig]:
+    """Load the ResNet backbone from a trained policy (local or HuggingFace).
+    
+    Args:
+        policy_path: Path to the policy checkpoint. Can be a local path to a directory containing
+            pretrained_model files, or a HuggingFace Hub repository ID (e.g., 'username/model_name').
+        device: The device to load the policy on (e.g., 'cpu', 'cuda', 'cuda:0').
+    
+    Returns:
+        A tuple containing:
+            - resnet (torch.nn.Module): The ResNet backbone extracted from the policy.
+            - policy_config (PreTrainedConfig): The configuration object for the loaded policy.
+    
+    Raises:
+        AttributeError: If the ResNet backbone cannot be found in the policy structure. This can
+            occur if the policy architecture doesn't have a 'backbone' attribute in either
+            policy.model or directly in the policy object.
     """
     logger.info(f"Loading policy from {policy_path}")
 
@@ -128,7 +140,7 @@ class RNDDataset(torch.utils.data.Dataset):
         if self.camera_key:
             image = item[self.camera_key]
         else:
-            raise ValueError("No camera keys found in dataset")
+            raise KeyError("No camera keys found in dataset")
 
         # Extract state (joint positions)
         state_keys = [k for k in item.keys() if "state" in k and "action" not in k]
@@ -140,14 +152,14 @@ class RNDDataset(torch.utils.data.Dataset):
             if state_keys:
                 state = torch.cat([item[k] for k in state_keys])
             else:
-                raise ValueError("Could not find state in dataset")
+                raise KeyError("Could not find state in dataset")
 
         # Extract action
         action_keys = [k for k in item.keys() if "action" in k]
         if action_keys:
             action = item[action_keys[0]]
         else:
-            raise ValueError("Could not find action in dataset")
+            raise KeyError("Could not find action in dataset")
 
         return image, state, action
 
