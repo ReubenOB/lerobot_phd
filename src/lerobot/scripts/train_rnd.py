@@ -65,7 +65,23 @@ def make_image_transforms(image_size: tuple[int, int]) -> transforms.Compose:
 
 
 def load_policy_backbone(policy_path: str | Path, device: str) -> tuple[torch.nn.Module, PreTrainedConfig]:
-    """Load the ResNet backbone from a trained policy (local or HuggingFace)."""
+    """Load the ResNet backbone from a trained policy (local or HuggingFace).
+    
+    Args:
+        policy_path: Path to the policy checkpoint. Can be a local path to a directory containing
+            pretrained_model files, or a HuggingFace Hub repository ID (e.g., 'username/model_name').
+        device: The device to load the policy on (e.g., 'cpu', 'cuda', 'cuda:0').
+    
+    Returns:
+        A tuple containing:
+            - resnet (torch.nn.Module): The ResNet backbone extracted from the policy.
+            - policy_config (PreTrainedConfig): The configuration object for the loaded policy.
+    
+    Raises:
+        AttributeError: If the ResNet backbone cannot be found in the policy structure. This can
+            occur if the policy architecture doesn't have a 'backbone' attribute in either
+            policy.model or directly in the policy object.
+    """
     logger.info(f"Loading policy from {policy_path}")
 
     # Load policy config (handles both local and HF repos)
