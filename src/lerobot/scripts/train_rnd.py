@@ -28,6 +28,14 @@ Usage with local policy:
         --num-epochs 200 \
         --batch-size 32
 
+Usage with specific camera (e.g., aria glasses only):
+    python lerobot/scripts/train_rnd.py \
+        --policy-path RAPOB/act_aria_model \
+        --dataset-repo-id RAPOB/aria_50_2_cam \
+        --output-dir outputs/rnd/aria_only \
+        --camera-key observation.images.aria \
+        --num-epochs 200
+
 Usage with HuggingFace policy:
     python lerobot/scripts/train_rnd.py \
         --policy-path your_username/act_so101_pick_place \
@@ -75,12 +83,13 @@ def make_image_transforms(image_size: tuple[int, int]) -> transforms.Compose:
     ])
 
 
-def load_policy_backbone(policy_path: str | Path, device: str) -> tuple[torch.nn.Module, PreTrainedConfig]:
+def load_policy_backbone(policy_path: str | Path, dataset_repo_id: str, device: str) -> tuple[torch.nn.Module, PreTrainedConfig]:
     """Load the ResNet backbone from a trained policy (local or HuggingFace).
     
     Args:
         policy_path: Path to the policy checkpoint. Can be a local path to a directory containing
             pretrained_model files, or a HuggingFace Hub repository ID (e.g., 'username/model_name').
+        dataset_repo_id: The dataset repository ID to load metadata from.
         device: The device to load the policy on (e.g., 'cpu', 'cuda', 'cuda:0').
     
     Returns:
@@ -124,11 +133,21 @@ def load_policy_backbone(policy_path: str | Path, device: str) -> tuple[torch.nn
 class RNDDataset(torch.utils.data.Dataset):
     """Wrapper around LeRobotDataset for RND training."""
 
-    def __init__(self, lerobot_dataset: LeRobotDataset):
+    def __init__(self, lerobot_dataset: LeRobotDataset, camera_key: str | None = None):
         self.dataset = lerobot_dataset
         self.camera_keys = lerobot_dataset.meta.camera_keys
-        # Use first camera if multiple available
-        self.camera_key = self.camera_keys[0] if self.camera_keys else None
+        
+        # Use specified camera key or fall back to first available
+        if camera_key:
+            if camera_key not in self.camera_keys:
+                available = ", ".join(self.camera_keys)
+                raise ValueError(f"Camera key '{camera_key}' not found. Available: {available}")
+            self.camera_key = camera_key
+        else:
+            self.camera_key = self.camera_keys[0] if self.camera_keys else None
+        
+        logger.info(f"Using camera key: {self.camera_key}")
+        logger.info(f"Available cameras: {self.camera_keys}")
 
     def __len__(self):
         return len(self.dataset)
@@ -174,8 +193,23 @@ def train_rnd(
     image_size: tuple[int, int] = (96, 96),
     device: str = "cuda",
     num_workers: int = 4,
+    camera_key: str | None = None,
 ):
-    """Train RND module on successful demonstrations."""
+    """Train RND module on successful demonstrations.
+    
+    Args:
+        policy_path: Path to trained policy (local dir or HuggingFace repo).
+        dataset_repo_id: Dataset repo ID (e.g., 'RAPOB/aria_50_2_cam').
+        output_dir: Directory to save trained RND model.
+        num_epochs: Number of training epochs.
+        batch_size: Training batch size.
+        learning_rate: Learning rate for predictor network.
+        image_size: Target image size (height, width).
+        device: Device to use ('cuda' or 'cpu').
+        num_workers: Number of dataloader workers.
+        camera_key: Specific camera to use (e.g., 'observation.images.aria').
+                   If None, uses the first available camera.
+    """
 
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(device if torch.cuda.is_available() else "cpu")
@@ -231,7 +265,7 @@ def train_rnd(
         logger.info(f"Total RND input dimension: {resnet_dim + state_dim + action_dim}")
 
     # Create dataloader
-    rnd_dataset = RNDDataset(lerobot_dataset)
+    rnd_dataset = RNDDataset(lerobot_dataset, camera_key=camera_key)
     dataloader = DataLoader(
         rnd_dataset,
         batch_size=batch_size,
@@ -292,12 +326,17 @@ def train_rnd(
         "dataset_repo_id": dataset_repo_id,
         "policy_path": str(policy_path),
         "policy_type": policy_config.type if hasattr(policy_config, "type") else "unknown",
+        "camera_key": rnd_dataset.camera_key,
+        "available_cameras": list(rnd_dataset.camera_keys),
         "state_dim": state_dim,
         "action_dim": action_dim,
         "image_size": image_size,
         "num_epochs": num_epochs,
         "batch_size": batch_size,
         "learning_rate": learning_rate,
+        "uncertainty_threshold": uncertainty_threshold,
+        "uncertainty_mean": uncertainty_mean,
+        "uncertainty_std": uncertainty_std,
     }
     with open(output_dir / "training_info.json", "w") as f:
         json.dump(info, f, indent=2)
@@ -362,6 +401,12 @@ def main():
         default=4,
         help="Number of dataloader workers",
     )
+    parser.add_argument(
+        "--camera-key",
+        type=str,
+        default=None,
+        help="Specific camera key to use (e.g., 'observation.images.aria'). If not set, uses first camera.",
+    )
 
     args = parser.parse_args()
 
@@ -375,6 +420,7 @@ def main():
         image_size=tuple(args.image_size),
         device=args.device,
         num_workers=args.num_workers,
+        camera_key=args.camera_key,
     )
 
 

@@ -1,6 +1,6 @@
 robot:
   type: so101_follower
-  port: /dev/ttyACM0
+  port: /dev/ttyACM3
   id: fol_gla_1
   cameras:
     # front:
@@ -29,10 +29,16 @@ robot:
       width: 640
       height: 480
       fps: 30
+    aria:
+      type: ros2
+      topic_name: /aria/eye_gaze/visualization_small
+      width: 640
+      height: 480
+      fps: 30
 
 teleop:
   type: so101_leader
-  port: /dev/ttyACM1
+  port: /dev/ttyACM2
   id: lea_gla_1
 
 dataset:
@@ -40,6 +46,6 @@ dataset:
   reset_time_s: 5
   private: true
 
-display_data: true
+display_data: false
 
 #lerobot-record   --config_path=record.yaml   --dataset.single_task="another_task"  --dataset.repo_id="RAPOB/x"  --dataset.num_episode=20

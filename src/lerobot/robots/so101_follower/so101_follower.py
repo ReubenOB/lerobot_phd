@@ -267,14 +267,24 @@ class SO101Follower(Robot):
         `max_relative_target`. In this case, the action sent differs from original action.
         Thus, this function always returns the action actually sent.
 
+        If ROS2 bridge is enabled and uncertainty is high, will skip sending action
+        (non-blocking) to allow faster resume when uncertainty normalizes.
+
         Raises:
             RobotDeviceNotConnectedError: if robot is not connected.
 
         Returns:
-            the action sent to the motors, potentially clipped.
+            the action sent to the motors, potentially clipped. Returns the input action
+            unchanged if paused due to high uncertainty.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Check for uncertainty pause (if ROS2 bridge is enabled)
+        # Non-blocking: just skip this action if paused
+        if self.ros2_bridge and self.ros2_bridge.is_paused():
+            # Return input action without sending (robot holds position)
+            return action
 
         goal_pos = {key.removesuffix(".pos"): val for key,
                     val in action.items() if key.endswith(".pos")}
