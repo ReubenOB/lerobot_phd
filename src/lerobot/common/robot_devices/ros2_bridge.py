@@ -13,7 +13,7 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import JointState, Image
 from trajectory_msgs.msg import JointTrajectory
 from control_msgs.action import FollowJointTrajectory
-from std_msgs.msg import Header
+from std_msgs.msg import Header, Bool
 import threading
 import time
 from typing import Dict, Optional, Callable
@@ -28,7 +28,8 @@ class LeRobotROS2Bridge:
 
     def __init__(self, node_name: str = 'lerobot_bridge', joint_names: list = None, 
                  camera_names: list = None, subscribe_to_cameras: dict = None,
-                 send_action_callback: Callable = None):
+                 send_action_callback: Callable = None, enable_uncertainty_pause: bool = True,
+                 on_resume_callback: Callable = None):
         """
         Initialize ROS2 bridge
 
@@ -38,11 +39,15 @@ class LeRobotROS2Bridge:
             camera_names: List of camera names to publish (e.g., ['top', 'wrist'])
             subscribe_to_cameras: Dict of camera_name -> topic_name to subscribe to
             send_action_callback: Callback function to send actions to robot (for MoveIt control)
+            enable_uncertainty_pause: Enable listening to /uncertainty/pause topic
+            on_resume_callback: Callback to call when resuming from pause (e.g., to reset policy)
         """
         self.joint_names = joint_names or []
         self.camera_names = camera_names or []
         self.subscribe_to_cameras = subscribe_to_cameras or {}
         self.send_action_callback = send_action_callback
+        self.enable_uncertainty_pause = enable_uncertainty_pause
+        self.on_resume_callback = on_resume_callback
         self.node = None
         self.joint_state_publisher = None
         self.image_publishers = {}
@@ -56,6 +61,11 @@ class LeRobotROS2Bridge:
         # Lock to prevent concurrent bus access during trajectory execution
         self.bus_lock = threading.Lock()
         self.trajectory_executing = False
+        
+        # Uncertainty-based pause state
+        self.uncertainty_paused = False
+        self.uncertainty_pause_lock = threading.Lock()
+        self._just_resumed = False  # Flag to indicate we just resumed from pause
         
         # Clean joint names (without .pos suffix) for ROS2
         self.clean_joint_names = [j.replace('.pos', '') for j in self.joint_names]
@@ -114,6 +124,16 @@ class LeRobotROS2Bridge:
                 callback_group=self.callback_group
             )
 
+            # Subscribe to uncertainty pause topic
+            if self.enable_uncertainty_pause:
+                self.pause_subscriber = self.node.create_subscription(
+                    Bool,
+                    '/uncertainty/pause',
+                    self._uncertainty_pause_callback,
+                    10
+                )
+                print(f"[LeRobot] Uncertainty pause subscriber enabled")
+
             self.enabled = True
 
             # Use MultiThreadedExecutor for action server
@@ -140,6 +160,58 @@ class LeRobotROS2Bridge:
                 self.executor.spin_once(timeout_sec=0.01)
         except Exception as e:
             print(f"[LeRobot] Spin error: {e}")
+
+    def _uncertainty_pause_callback(self, msg: Bool):
+        """Callback for uncertainty pause signal."""
+        with self.uncertainty_pause_lock:
+            was_paused = self.uncertainty_paused
+            self.uncertainty_paused = msg.data
+            
+            if msg.data and not was_paused:
+                print("[LeRobot] ⚠️  HIGH UNCERTAINTY - Robot paused")
+            elif not msg.data and was_paused:
+                print("[LeRobot] ✓ Uncertainty normalized - Robot resumed")
+                self._just_resumed = True
+                # Call resume callback (e.g., to reset policy action queue)
+                if self.on_resume_callback:
+                    try:
+                        self.on_resume_callback()
+                    except Exception as e:
+                        print(f"[LeRobot] Resume callback error: {e}")
+
+    def is_paused(self) -> bool:
+        """Check if robot should be paused due to high uncertainty."""
+        with self.uncertainty_pause_lock:
+            return self.uncertainty_paused
+
+    def check_and_clear_resumed(self) -> bool:
+        """Check if we just resumed from pause and clear the flag.
+        
+        Returns:
+            True if we just resumed (policy should be reset), False otherwise.
+        """
+        with self.uncertainty_pause_lock:
+            if self._just_resumed:
+                self._just_resumed = False
+                return True
+            return False
+
+    def wait_for_resume(self, timeout: float = None) -> bool:
+        """
+        Block until uncertainty drops and pause is released.
+        
+        Args:
+            timeout: Maximum time to wait in seconds. None = wait forever.
+            
+        Returns:
+            True if resumed, False if timeout occurred.
+        """
+        start_time = time.time()
+        while self.is_paused():
+            time.sleep(0.05)  # Check every 50ms
+            if timeout and (time.time() - start_time) > timeout:
+                return False
+        return True
 
     def publish_joint_states(self, observation: Dict[str, float]):
         """

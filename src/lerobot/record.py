@@ -241,6 +241,11 @@ def record_loop(
                 dataset.features, observation, prefix="observation")
 
         if policy is not None:
+            # Check if we just resumed from uncertainty pause - reset policy action queue
+            if hasattr(robot, 'ros2_bridge') and robot.ros2_bridge and robot.ros2_bridge.check_and_clear_resumed():
+                policy.reset()
+                logging.info("Policy reset after uncertainty pause resume")
+            
             action_values = predict_action(
                 observation_frame,
                 policy,
