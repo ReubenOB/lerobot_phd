@@ -67,9 +67,9 @@ class SO101Follower(Robot):
         )
         self.cameras = make_cameras_from_configs(config.cameras)
 
-        # Initialize ROS2 bridge automatically if ROS2 is available
+        # Initialize ROS2 bridge automatically if ROS2 is available and enabled
         self.ros2_bridge = None
-        if ROS2_AVAILABLE:
+        if ROS2_AVAILABLE and config.enable_ros2_bridge:
             try:
                 # Use motor names from the bus for joint names
                 joint_names = [f"{motor}.pos" for motor in self.bus.motors]

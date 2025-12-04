@@ -28,6 +28,14 @@ from .config_bi_so101_follower import BiSO101FollowerConfig
 
 logger = logging.getLogger(__name__)
 
+# Check if ROS2 is available
+try:
+    from lerobot.common.robot_devices.ros2_bridge import LeRobotROS2Bridge
+    ROS2_AVAILABLE = True
+except ImportError:
+    ROS2_AVAILABLE = False
+    logger.info("[LeRobot] ROS2 not available")
+
 
 class BiSO101Follower(Robot):
     """
@@ -49,6 +57,7 @@ class BiSO101Follower(Robot):
             max_relative_target=config.left_arm_max_relative_target,
             use_degrees=config.left_arm_use_degrees,
             cameras={},
+            enable_ros2_bridge=False,  # Bimanual parent creates shared bridge
         )
 
         right_arm_config = SO101FollowerConfig(
@@ -59,11 +68,45 @@ class BiSO101Follower(Robot):
             max_relative_target=config.right_arm_max_relative_target,
             use_degrees=config.right_arm_use_degrees,
             cameras={},
+            enable_ros2_bridge=False,  # Bimanual parent creates shared bridge
         )
 
         self.left_arm = SO101Follower(left_arm_config)
         self.right_arm = SO101Follower(right_arm_config)
         self.cameras = make_cameras_from_configs(config.cameras)
+        
+        # Initialize ROS2 bridge for bimanual robot if ROS2 is available
+        self.ros2_bridge = None
+        if ROS2_AVAILABLE:
+            try:
+                # Build joint names with left_/right_ prefixes
+                joint_names = (
+                    [f"left_{motor}.pos" for motor in self.left_arm.bus.motors] +
+                    [f"right_{motor}.pos" for motor in self.right_arm.bus.motors]
+                )
+                logger.info(f"[BiSO101] Creating ROS2 bridge with joint names: {joint_names}")
+                
+                # Get camera names from config
+                camera_names = list(config.cameras.keys()) if config.cameras else []
+
+                # Check which cameras are ROS2 subscribers
+                subscribe_to_cameras = {}
+                for cam_name, cam_config in config.cameras.items():
+                    if cam_config.type == 'ros2':
+                        subscribe_to_cameras[cam_name] = cam_config.topic_name
+
+                # Always create bridge for joint state publishing (even without ROS2 cameras)
+                self.ros2_bridge = LeRobotROS2Bridge(
+                    node_name='lerobot_bi_so101_follower',
+                    joint_names=joint_names,
+                    camera_names=camera_names,
+                    subscribe_to_cameras=subscribe_to_cameras,
+                )
+                logger.info(f"[LeRobot] ROS2 bridge enabled for BiSO101Follower, bridge.enabled={self.ros2_bridge.enabled}")
+            except Exception as e:
+                logger.warning(f"[LeRobot] ROS2 bridge failed to initialize: {e}")
+                import traceback
+                traceback.print_exc()
 
     @property
     def _motors_ft(self) -> dict[str, type]:
@@ -120,19 +163,43 @@ class BiSO101Follower(Robot):
     def get_observation(self) -> dict[str, Any]:
         obs_dict = {}
 
-        # Add "left_" prefix
+        # Add "left_" prefix - but filter out camera keys (we handle cameras separately)
         left_obs = self.left_arm.get_observation()
-        obs_dict.update({f"left_{key}": value for key, value in left_obs.items()})
+        for key, value in left_obs.items():
+            # Skip camera observations from child arms (we handle cameras at this level)
+            if key not in self.left_arm.cameras:
+                obs_dict[f"left_{key}"] = value
 
-        # Add "right_" prefix
+        # Add "right_" prefix - but filter out camera keys
         right_obs = self.right_arm.get_observation()
-        obs_dict.update({f"right_{key}": value for key, value in right_obs.items()})
+        for key, value in right_obs.items():
+            if key not in self.right_arm.cameras:
+                obs_dict[f"right_{key}"] = value
 
+        # Capture images from cameras
         for cam_key, cam in self.cameras.items():
             start = time.perf_counter()
-            obs_dict[cam_key] = cam.async_read()
+
+            # Check if this is a ROS2 camera - get frame from bridge instead
+            if hasattr(cam, 'config') and cam.config.type == 'ros2':
+                if self.ros2_bridge:
+                    frame = self.ros2_bridge.get_camera_frame(cam_key)
+                    if frame is not None:
+                        obs_dict[cam_key] = frame
+                    else:
+                        logger.warning(f"No frame available for ROS2 camera {cam_key}")
+                else:
+                    logger.warning(f"ROS2 camera {cam_key} but no ros2_bridge set")
+            else:
+                obs_dict[cam_key] = cam.async_read()
+
             dt_ms = (time.perf_counter() - start) * 1e3
             logger.debug(f"{self} read {cam_key}: {dt_ms:.1f}ms")
+
+        # Publish to ROS2 if enabled
+        if self.ros2_bridge:
+            self.ros2_bridge.publish_joint_states(obs_dict)
+            self.ros2_bridge.publish_images(obs_dict)
 
         return obs_dict
 
@@ -161,3 +228,7 @@ class BiSO101Follower(Robot):
 
         for cam in self.cameras.values():
             cam.disconnect()
+        
+        # Shutdown ROS2 bridge
+        if self.ros2_bridge:
+            self.ros2_bridge.shutdown()
