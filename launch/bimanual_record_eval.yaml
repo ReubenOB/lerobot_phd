@@ -31,14 +31,27 @@ robot:
       width: 640
       height: 480
       fps: 30
+    # aria:
+    #   type: ros2
+    #   topic_name: /aria/eye_gaze/visualization_small
+    #   width: 640
+    #   height: 480
+    #   fps: 30
 
-# No teleop for policy evaluation - robot is controlled by the policy
+teleop:
+  type: bi_so101_leader
+  # Arm IDs (must match calibration files)
+  left_arm_id: LEADER_0
+  right_arm_id: LEADER_1
+  # Ports (using udev symlinks)
+  left_arm_port: /dev/ttyACM_left_leader
+  right_arm_port: /dev/ttyACM_right_leader
 
-policy:
-  path: null  # Override with --policy.path="RAPOB/your_trained_policy"
+# Policy is specified via CLI: --policy.path="RAPOB/your_trained_policy"
 
 dataset:
-  episode_time_s: 30
+  single_task: "bimanual_transfer_pen_holder"  # Task description
+  episode_time_s: 40
   reset_time_s: 10
   private: true
 

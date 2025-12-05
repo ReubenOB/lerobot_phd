@@ -204,6 +204,21 @@ class BiSO101Follower(Robot):
         return obs_dict
 
     def send_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        """Command both arms to move to target joint configurations.
+        
+        If ROS2 bridge is enabled and uncertainty is high, will skip sending action
+        (non-blocking) to allow faster resume when uncertainty normalizes.
+        
+        Returns:
+            the action sent to the motors. Returns the input action unchanged if
+            paused due to high uncertainty.
+        """
+        # Check for uncertainty pause (if ROS2 bridge is enabled)
+        # Non-blocking: just skip this action if paused
+        if self.ros2_bridge and self.ros2_bridge.is_paused():
+            # Return input action without sending (robot holds position)
+            return action
+        
         # Remove "left_" prefix
         left_action = {
             key.removeprefix("left_"): value for key, value in action.items() if key.startswith("left_")
