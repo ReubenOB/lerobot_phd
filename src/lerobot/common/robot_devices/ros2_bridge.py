@@ -227,7 +227,7 @@ class LeRobotROS2Bridge:
             msg = JointState()
             msg.header = Header()
             msg.header.stamp = self.node.get_clock().now().to_msg()
-            msg.header.frame_id = 'base_link'
+            msg.header.frame_id = 'world'
 
             msg.name = []
             msg.position = []
@@ -246,7 +246,8 @@ class LeRobotROS2Bridge:
                     msg.velocity.append(0.0)
                     msg.effort.append(0.0)
 
-            self.joint_state_publisher.publish(msg)
+            if len(msg.name) > 0:
+                self.joint_state_publisher.publish(msg)
 
         except Exception as e:
             print(f"[LeRobot] Failed to publish joint states: {e}")

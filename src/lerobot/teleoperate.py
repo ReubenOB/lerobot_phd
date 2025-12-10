@@ -66,6 +66,7 @@ from lerobot.robots import (  # noqa: F401
     Robot,
     RobotConfig,
     bi_so100_follower,
+    bi_so101_follower,
     hope_jr,
     koch_follower,
     make_robot_from_config,
@@ -76,6 +77,7 @@ from lerobot.teleoperators import (  # noqa: F401
     Teleoperator,
     TeleoperatorConfig,
     bi_so100_leader,
+    bi_so101_leader,
     gamepad,
     homunculus,
     koch_leader,
@@ -108,8 +110,11 @@ def teleop_loop(
     while True:
         loop_start = time.perf_counter()
         action = teleop.get_action()
+        
+        # Always get observation to trigger ROS2 joint state publishing
+        observation = robot.get_observation()
+        
         if display_data:
-            observation = robot.get_observation()
             log_rerun_data(observation, action)
 
         robot.send_action(action)

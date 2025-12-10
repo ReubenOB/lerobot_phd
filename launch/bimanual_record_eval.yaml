@@ -1,0 +1,61 @@
+# Bimanual SO-101 Policy Evaluation Config
+# Usage:
+#   1. Launch cameras: ros2 launch vigil_camera camera_publisher_config.launch.py config:=$(ros2 pkg prefix vigil_camera)/share/vigil_camera/config/bimanual_camera_publisher.yaml
+#   2. Evaluate: lerobot-record --config_path=launch/bimanual_record_eval.yaml --policy.path="RAPOB/bimanual_policy" --dataset.repo_id="RAPOB/bimanual_eval"
+
+robot:
+  type: bi_so101_follower
+  # Arm IDs (must match calibration files)
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  # Ports (using udev symlinks)
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    # ROS2 camera configurations (launch vigil_camera first)
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    # aria:
+    #   type: ros2
+    #   topic_name: /aria/eye_gaze/visualization_small
+    #   width: 640
+    #   height: 480
+    #   fps: 30
+
+teleop:
+  type: bi_so101_leader
+  # Arm IDs (must match calibration files)
+  left_arm_id: LEADER_0
+  right_arm_id: LEADER_1
+  # Ports (using udev symlinks)
+  left_arm_port: /dev/ttyACM_left_leader
+  right_arm_port: /dev/ttyACM_right_leader
+
+# Policy is specified via CLI: --policy.path="RAPOB/your_trained_policy"
+
+dataset:
+  single_task: "bimanual_transfer_pen_holder"  # Task description
+  episode_time_s: 40
+  reset_time_s: 10
+  private: true
+
+display_data: false
+
+# Example usage:
+# lerobot-record --config_path=launch/bimanual_record_eval.yaml --policy.path="RAPOB/bimanual_act_policy" --dataset.repo_id="RAPOB/bimanual_eval_1" --dataset.num_episode=10

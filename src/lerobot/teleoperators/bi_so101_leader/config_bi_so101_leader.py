@@ -14,14 +14,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config import TeleoperatorConfig
-from .teleoperator import Teleoperator
-from .utils import make_teleoperator_from_config
+from dataclasses import dataclass
 
-from . import bi_so100_leader
-from . import bi_so101_leader
-from . import gamepad
-from . import homunculus
-from . import koch_leader
-from . import so100_leader
-from . import so101_leader
+from ..config import TeleoperatorConfig
+
+
+@TeleoperatorConfig.register_subclass("bi_so101_leader")
+@dataclass
+class BiSO101LeaderConfig(TeleoperatorConfig):
+    left_arm_port: str = "/dev/ttyACM_left_leader"
+    right_arm_port: str = "/dev/ttyACM_right_leader"
+    
+    # Arm IDs for calibration file lookup
+    left_arm_id: str = "LEADER_0"
+    right_arm_id: str = "LEADER_1"

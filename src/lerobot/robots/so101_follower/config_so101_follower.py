@@ -39,3 +39,7 @@ class SO101FollowerConfig(RobotConfig):
 
     # Set to `True` for backward compatibility with previous policies/dataset
     use_degrees: bool = False
+    
+    # Enable ROS2 bridge for joint state publishing and camera subscriptions
+    # Set to False when using as part of a bimanual robot (parent creates shared bridge)
+    enable_ros2_bridge: bool = True

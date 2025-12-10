@@ -14,14 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .config import TeleoperatorConfig
-from .teleoperator import Teleoperator
-from .utils import make_teleoperator_from_config
-
-from . import bi_so100_leader
-from . import bi_so101_leader
-from . import gamepad
-from . import homunculus
-from . import koch_leader
-from . import so100_leader
-from . import so101_leader
+from .bi_so101_leader import BiSO101Leader
+from .config_bi_so101_leader import BiSO101LeaderConfig
