@@ -101,6 +101,8 @@ class BiSO101Follower(Robot):
                     joint_names=joint_names,
                     camera_names=camera_names,
                     subscribe_to_cameras=subscribe_to_cameras,
+                    prismatic_gripper=getattr(config, 'prismatic_gripper', False),
+                    joint_offsets=getattr(config, 'joint_offsets', {}),
                 )
                 logger.info(f"[LeRobot] ROS2 bridge enabled for BiSO101Follower, bridge.enabled={self.ros2_bridge.enabled}")
             except Exception as e:

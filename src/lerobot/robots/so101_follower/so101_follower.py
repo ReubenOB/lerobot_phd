@@ -88,6 +88,8 @@ class SO101Follower(Robot):
                     camera_names=camera_names,
                     subscribe_to_cameras=subscribe_to_cameras,
                     send_action_callback=self._ros2_send_action,
+                    prismatic_gripper=getattr(config, 'prismatic_gripper', False),
+                    joint_offsets=getattr(config, 'joint_offsets', {}),
                 )
                 logger.info("[LeRobot] ROS2 bridge enabled for SO101Follower")
             except Exception as e:

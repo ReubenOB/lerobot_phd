@@ -41,3 +41,11 @@ class BiSO101FollowerConfig(RobotConfig):
 
     # cameras (shared between both arms)
     cameras: dict[str, CameraConfig] = field(default_factory=dict)
+    
+    # Set to True if using parallel/prismatic gripper instead of revolute jaw gripper
+    prismatic_gripper: bool = False
+    
+    # Joint offsets (in degrees) to correct calibration mismatch with URDF
+    # Maps joint names (without .pos suffix) to offset values
+    # Example: {"left_shoulder_pan": -10.0, "right_shoulder_lift": 5.0}
+    joint_offsets: dict[str, float] = field(default_factory=dict)

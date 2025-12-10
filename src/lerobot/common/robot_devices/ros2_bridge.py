@@ -25,11 +25,23 @@ class LeRobotROS2Bridge:
     ROS2 bridge that can be integrated into LeRobot robot classes.
     Handles publishing robot state, subscribing to camera feeds, and MoveIt trajectory control.
     """
+    
+    # SO-101 URDF joint limits (in degrees) - symmetric around 0
+    # These define the physical range for each joint type
+    # Format: (lower_deg, upper_deg) 
+    SO101_JOINT_LIMITS = {
+        'shoulder_pan': (-110.0, 110.0),    # ±110°
+        'shoulder_lift': (-100.0, 100.0),   # ±100°
+        'elbow_flex': (-100.0, 90.0),       # -100° to +90°
+        'wrist_flex': (-95.0, 95.0),        # ±95°
+        'wrist_roll': (-160.0, 160.0),      # ±160°
+    }
 
     def __init__(self, node_name: str = 'lerobot_bridge', joint_names: list = None, 
                  camera_names: list = None, subscribe_to_cameras: dict = None,
                  send_action_callback: Callable = None, enable_uncertainty_pause: bool = True,
-                 on_resume_callback: Callable = None):
+                 on_resume_callback: Callable = None, prismatic_gripper: bool = False,
+                 joint_offsets: dict = None):
         """
         Initialize ROS2 bridge
 
@@ -41,6 +53,8 @@ class LeRobotROS2Bridge:
             send_action_callback: Callback function to send actions to robot (for MoveIt control)
             enable_uncertainty_pause: Enable listening to /uncertainty/pause topic
             on_resume_callback: Callback to call when resuming from pause (e.g., to reset policy)
+            prismatic_gripper: If True, convert gripper values from 0-100 range to meters for prismatic joints
+            joint_offsets: Dict of joint_name -> offset in degrees to correct calibration mismatch
         """
         self.joint_names = joint_names or []
         self.camera_names = camera_names or []
@@ -48,6 +62,14 @@ class LeRobotROS2Bridge:
         self.send_action_callback = send_action_callback
         self.enable_uncertainty_pause = enable_uncertainty_pause
         self.on_resume_callback = on_resume_callback
+        self.prismatic_gripper = prismatic_gripper
+        self.joint_offsets = joint_offsets or {}
+        
+        # Prismatic gripper conversion constants
+        # LeRobot gripper: 0 (closed) to 100 (open)
+        # Parallel gripper: -0.035 (open) to -0.0075 (closed) meters for left finger
+        self.gripper_min_meters = -0.035  # fully open
+        self.gripper_max_meters = -0.0075  # fully closed
         self.node = None
         self.joint_state_publisher = None
         self.image_publishers = {}
@@ -219,6 +241,17 @@ class LeRobotROS2Bridge:
 
         Args:
             observation: Dictionary of joint_name -> position (e.g., {'shoulder_pan.pos': 45.0})
+                        Values are normalized ±100 (RANGE_M100_100 mode) or 0-100 for gripper
+                        
+        Conversion:
+            LeRobot RANGE_M100_100 mode:
+                - -100 = calibration range_min position
+                - +100 = calibration range_max position  
+                - 0 = midpoint of calibration range
+                
+            We convert to URDF radians where 0 = physical center of joint.
+            If calibration was symmetric, LeRobot 0 = URDF 0.
+            If calibration was asymmetric, use joint_offsets to correct.
         """
         if not self.enabled or not self.joint_state_publisher:
             return
@@ -239,10 +272,31 @@ class LeRobotROS2Bridge:
                     # Strip .pos suffix from joint names for ROS2 compatibility
                     clean_joint_name = joint_name.replace('.pos', '')
                     msg.name.append(clean_joint_name)
+                    
+                    # Get the raw value from observation (normalized ±100)
+                    raw_value = float(observation[joint_name])
 
-                    # Convert from degrees to radians for ROS2
-                    position_rad = float(observation[joint_name]) * (np.pi / 180.0)
-                    msg.position.append(position_rad)
+                    # Handle gripper differently if using prismatic gripper
+                    if 'gripper' in joint_name.lower() and self.prismatic_gripper:
+                        # Convert from 0-100 range to meters for prismatic gripper
+                        # 0 = closed (max_meters), 100 = open (min_meters)
+                        gripper_value = max(0, min(100, raw_value))
+                        # Linear interpolation: 0->closed, 100->open
+                        position = self.gripper_max_meters + (self.gripper_min_meters - self.gripper_max_meters) * (gripper_value / 100.0)
+                        msg.position.append(position)
+                    else:
+                        # Convert normalized ±100 to physical degrees using URDF limits
+                        position_deg = self._normalized_to_degrees(clean_joint_name, raw_value)
+                        
+                        # Apply calibration offset if configured (in degrees)
+                        # Use this when calibration midpoint ≠ physical center
+                        offset = self.joint_offsets.get(clean_joint_name, 0.0)
+                        position_deg += offset
+                        
+                        # Convert degrees to radians for ROS2
+                        position_rad = position_deg * (np.pi / 180.0)
+                        msg.position.append(position_rad)
+                    
                     msg.velocity.append(0.0)
                     msg.effort.append(0.0)
 
@@ -251,6 +305,57 @@ class LeRobotROS2Bridge:
 
         except Exception as e:
             print(f"[LeRobot] Failed to publish joint states: {e}")
+    
+    def _normalized_to_degrees(self, joint_name: str, normalized_value: float) -> float:
+        """
+        Convert normalized ±100 value to physical degrees based on URDF joint limits.
+        
+        LeRobot normalization (RANGE_M100_100):
+            -100 → calibration range_min position (physical minimum during calibration)
+            +100 → calibration range_max position (physical maximum during calibration)
+            0 → midpoint of calibration range
+            
+        We assume calibration covered the full physical range, so:
+            -100 → URDF lower limit
+            +100 → URDF upper limit
+            0 → URDF center (which is physical 0° for symmetric limits)
+            
+        For asymmetric limits (like elbow_flex: -100° to +90°):
+            -100 → -100° physical
+            +100 → +90° physical
+            0 → -5° physical (midpoint)
+            
+        Args:
+            joint_name: Joint name (e.g., 'left_shoulder_pan' or 'shoulder_pan')
+            normalized_value: Value in range ±100
+            
+        Returns:
+            Position in degrees relative to URDF limits
+        """
+        # Extract base joint name (remove left_/right_ prefix if present)
+        base_joint = joint_name
+        for prefix in ['left_', 'right_']:
+            if joint_name.startswith(prefix):
+                base_joint = joint_name[len(prefix):]
+                break
+        
+        # Get joint limits from the table
+        limits = self.SO101_JOINT_LIMITS.get(base_joint)
+        
+        if limits is None:
+            # Unknown joint - treat ±100 as ±100 degrees (original fallback behavior)
+            return normalized_value
+        
+        lower_deg, upper_deg = limits
+        
+        # Map normalized ±100 to URDF limits
+        # normalized -100 → lower_deg
+        # normalized +100 → upper_deg
+        # Linear interpolation: position = lower + ((normalized + 100) / 200) * range
+        range_deg = upper_deg - lower_deg
+        position_deg = lower_deg + ((normalized_value + 100.0) / 200.0) * range_deg
+        
+        return position_deg
 
     def _trajectory_callback(self, msg: JointTrajectory):
         """Handle incoming trajectory commands (topic-based)."""

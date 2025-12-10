@@ -5,6 +5,7 @@
 
 robot:
   type: bi_so101_follower
+  prismatic_gripper: true
   # Arm IDs (must match calibration files)
   left_arm_id: ARM_0
   right_arm_id: ARM_1

@@ -43,3 +43,11 @@ class SO101FollowerConfig(RobotConfig):
     # Enable ROS2 bridge for joint state publishing and camera subscriptions
     # Set to False when using as part of a bimanual robot (parent creates shared bridge)
     enable_ros2_bridge: bool = True
+    
+    # Set to True if using parallel/prismatic gripper instead of revolute jaw gripper
+    prismatic_gripper: bool = False
+    
+    # Joint offsets (in degrees) to correct calibration mismatch with URDF
+    # Maps joint names (without .pos suffix) to offset values
+    # Example: {"shoulder_pan": -10.0, "shoulder_lift": 5.0}
+    joint_offsets: dict[str, float] = field(default_factory=dict)
