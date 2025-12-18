@@ -20,8 +20,8 @@ from typing import Any, ClassVar
 import draccus
 from pydantic import BaseModel, Field
 
-from lerobot.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 from lerobot.motors import MotorCalibration
+from lerobot.utils.constants import HF_LEROBOT_CALIBRATION, ROBOTS
 
 
 class RobotConfig(BaseModel):
