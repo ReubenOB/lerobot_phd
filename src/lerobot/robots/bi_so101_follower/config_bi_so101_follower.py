@@ -21,33 +21,31 @@ from lerobot.cameras import CameraConfig
 from ..config import RobotConfig
 
 
-@RobotConfig.register_subclass("so101_follower")
+@RobotConfig.register_subclass("bi_so101_follower")
 @dataclass
-class SO101FollowerConfig(RobotConfig):
-    # Port to connect to the arm
-    port: str
-
-    disable_torque_on_disconnect: bool = True
-
-    # `max_relative_target` limits the magnitude of the relative positional target vector for safety purposes.
-    # Set this to a positive scalar to have the same value for all motors, or a list that is the same length as
-    # the number of motors in your follower arms.
-    max_relative_target: int | None = None
-
-    # cameras
-    cameras: dict[str, CameraConfig] = field(default_factory=dict)
-
-    # Set to `True` for backward compatibility with previous policies/dataset
-    use_degrees: bool = False
+class BiSO101FollowerConfig(RobotConfig):
+    left_arm_port: str = "/dev/ttyACM_left_follower"
+    right_arm_port: str = "/dev/ttyACM_right_follower"
     
-    # Enable ROS2 bridge for joint state publishing and camera subscriptions
-    # Set to False when using as part of a bimanual robot (parent creates shared bridge)
-    enable_ros2_bridge: bool = True
+    # Arm IDs for calibration file lookup
+    left_arm_id: str = "ARM_0"
+    right_arm_id: str = "ARM_1"
+
+    # Optional
+    left_arm_disable_torque_on_disconnect: bool = True
+    left_arm_max_relative_target: int | None = None
+    left_arm_use_degrees: bool = False
+    right_arm_disable_torque_on_disconnect: bool = True
+    right_arm_max_relative_target: int | None = None
+    right_arm_use_degrees: bool = False
+
+    # cameras (shared between both arms)
+    cameras: dict[str, CameraConfig] = field(default_factory=dict)
     
     # Set to True if using parallel/prismatic gripper instead of revolute jaw gripper
     prismatic_gripper: bool = False
     
     # Joint offsets (in degrees) to correct calibration mismatch with URDF
     # Maps joint names (without .pos suffix) to offset values
-    # Example: {"shoulder_pan": -10.0, "shoulder_lift": 5.0}
+    # Example: {"left_shoulder_pan": -10.0, "right_shoulder_lift": 5.0}
     joint_offsets: dict[str, float] = field(default_factory=dict)

@@ -20,12 +20,12 @@ from functools import cached_property
 from typing import Any
 
 from lerobot.cameras.utils import make_cameras_from_configs
+from lerobot.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 from lerobot.motors import Motor, MotorCalibration, MotorNormMode
 from lerobot.motors.feetech import (
     FeetechMotorsBus,
     OperatingMode,
 )
-from lerobot.utils.errors import DeviceAlreadyConnectedError, DeviceNotConnectedError
 
 from ..robot import Robot
 from ..utils import ensure_safe_goal_position
@@ -67,9 +67,9 @@ class SO101Follower(Robot):
         )
         self.cameras = make_cameras_from_configs(config.cameras)
 
-        # Initialize ROS2 bridge automatically if ROS2 is available
+        # Initialize ROS2 bridge automatically if ROS2 is available and enabled
         self.ros2_bridge = None
-        if ROS2_AVAILABLE:
+        if ROS2_AVAILABLE and config.enable_ros2_bridge:
             try:
                 # Use motor names from the bus for joint names
                 joint_names = [f"{motor}.pos" for motor in self.bus.motors]
@@ -88,6 +88,8 @@ class SO101Follower(Robot):
                     camera_names=camera_names,
                     subscribe_to_cameras=subscribe_to_cameras,
                     send_action_callback=self._ros2_send_action,
+                    prismatic_gripper=getattr(config, 'prismatic_gripper', False),
+                    joint_offsets=getattr(config, 'joint_offsets', {}),
                 )
                 logger.info("[LeRobot] ROS2 bridge enabled for SO101Follower")
             except Exception as e:
@@ -191,13 +193,6 @@ class SO101Follower(Robot):
                 self.bus.write("I_Coefficient", motor, 0)
                 self.bus.write("D_Coefficient", motor, 32)
 
-                if motor == "gripper":
-                    self.bus.write(
-                        "Max_Torque_Limit", motor, 500
-                    )  # 50% of the max torque limit to avoid burnout
-                    self.bus.write("Protection_Current", motor, 250)  # 50% of max current to avoid burnout
-                    self.bus.write("Overload_Torque", motor, 25)  # 25% torque when overloaded
-
     def setup_motors(self) -> None:
         for motor in reversed(self.bus.motors):
             input(f"Connect the controller board to the '{motor}' motor only and press enter.")
@@ -274,14 +269,24 @@ class SO101Follower(Robot):
         `max_relative_target`. In this case, the action sent differs from original action.
         Thus, this function always returns the action actually sent.
 
+        If ROS2 bridge is enabled and uncertainty is high, will skip sending action
+        (non-blocking) to allow faster resume when uncertainty normalizes.
+
         Raises:
             RobotDeviceNotConnectedError: if robot is not connected.
 
         Returns:
-            the action sent to the motors, potentially clipped.
+            the action sent to the motors, potentially clipped. Returns the input action
+            unchanged if paused due to high uncertainty.
         """
         if not self.is_connected:
             raise DeviceNotConnectedError(f"{self} is not connected.")
+
+        # Check for uncertainty pause (if ROS2 bridge is enabled)
+        # Non-blocking: just skip this action if paused
+        if self.ros2_bridge and self.ros2_bridge.is_paused():
+            # Return input action without sending (robot holds position)
+            return action
 
         goal_pos = {key.removesuffix(".pos"): val for key,
                     val in action.items() if key.endswith(".pos")}

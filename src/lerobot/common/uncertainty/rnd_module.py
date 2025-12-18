@@ -70,7 +70,7 @@ class RNDModule(nn.Module):
         rnd_out_dim: int = 256,
         image_size: Tuple[int, int] = (96, 96),
         device: str = "cuda",
-        rolling_window: int = 10
+        rolling_window: int = 20
     ):
         super().__init__()
         self.device = device
