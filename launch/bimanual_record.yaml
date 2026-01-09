@@ -32,12 +32,12 @@ robot:
       width: 640
       height: 480
       fps: 30
-    aria:
-      type: ros2
-      topic_name: /aria/eye_gaze/visualization_small
-      width: 640
-      height: 480
-      fps: 30
+    # aria:
+    #   type: ros2
+    #   topic_name: /aria/eye_gaze/visualization_small
+    #   width: 640
+    #   height: 480
+    #   fps: 30
 
 teleop:
   type: bi_so101_leader
@@ -49,8 +49,9 @@ teleop:
   right_arm_port: /dev/ttyACM_right_leader
 
 dataset:
-  episode_time_s: 30
-  reset_time_s: 5
+  single_task: "another_task"
+  episode_time_s: 60
+  reset_time_s: 10
   private: true
 
 display_data: false

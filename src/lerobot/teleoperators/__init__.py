@@ -16,7 +16,7 @@
 
 from .config import TeleoperatorConfig
 from .teleoperator import Teleoperator
-from .utils import make_teleoperator_from_config
+from .utils import TeleopEvents, make_teleoperator_from_config
 
 from . import bi_so100_leader
 from . import bi_so101_leader

@@ -1,0 +1,55 @@
+# Training configuration for v3 datasets with enhanced image transforms
+# Use with: lerobot-train --config launch/train_v3.yaml --dataset.repo_id RAPOB/Bi-manual_act_v3
+
+dataset:
+  repo_id: "RAPOB/Bi-manual_act_v3_transform"
+  image_transforms:
+    enable: true
+    max_num_transforms: 4
+    random_order: true
+    tfs:
+      brightness:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          brightness: [0.7, 1.3]
+      contrast:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          contrast: [0.7, 1.4]
+      saturation:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          saturation: [0.4, 1.7]
+      hue:
+        weight: 1.0
+        type: ColorJitter
+        kwargs:
+          hue: [-0.05, 0.05]
+      sharpness:
+        weight: 1.0
+        type: SharpnessJitter
+        kwargs:
+          sharpness: [0.4, 1.8]
+      affine:
+        weight: 0.8
+        type: RandomAffine
+        kwargs:
+          degrees: [-8.0, 8.0]
+          translate: [0.08, 0.08]
+          scale: [0.95, 1.05]
+          shear: [-2.0, 2.0]
+
+policy:
+  type: act
+  repo_id: "RAPOB/act_v3_base"
+  device: cuda
+  private: true
+
+wandb:
+  enable: true
+
+steps: 60000
+save_freq: 10000
