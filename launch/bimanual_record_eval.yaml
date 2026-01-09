@@ -59,4 +59,4 @@ dataset:
 display_data: false
 
 # Example usage:
-# lerobot-record --config_path=launch/bimanual_record_eval.yaml --policy.path="RAPOB/bimanual_act_policy" --dataset.repo_id="RAPOB/bimanual_eval_1" --dataset.num_episode=10
+# lerobot-record --config_path=launch/bimanual_record_eval.yaml --policy.path="RAPOB/act_v3_base" --dataset.repo_id="RAPOB/bimanual_eval_1" --dataset.num_episode=10
