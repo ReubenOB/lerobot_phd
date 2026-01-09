@@ -1,0 +1,209 @@
+# Multi-Policy Coffee Task Configuration
+# ======================================
+# This configuration file defines the complete setup for the multi-policy
+# orchestration system for the bimanual coffee pod pick-and-pour task.
+#
+# EXPERIMENT:
+#   - Policy 1: Pick coffee pod (gaze-based selection is trained into the policy)
+#   - SARM monitors progress, switches to Policy 2 at threshold
+#   - Policy 2: Pick cup and make coffee (gaze selection also trained into policy)
+#   - RND monitors Aria glasses camera for uncertainty-based pause/resume
+#
+# Usage:
+#   python -m lerobot.async_inference.orchestrator --config_path=launch/multi_policy_coffee.yaml
+#
+# Or with overrides:
+#   python -m lerobot.async_inference.orchestrator \
+#       --config_path=launch/multi_policy_coffee.yaml \
+#       --orchestrator.num_episodes=5 \
+#       --dataset.repo_id=MyOrg/my_dataset
+
+# ============================================================================
+# Robot Configuration (BIMANUAL)
+# ============================================================================
+robot:
+  type: bi_so101_follower
+  port_left_leader: /dev/ttyACM_LeftLeader
+  port_left_follower: /dev/ttyACM_LeftFollower
+  port_right_leader: /dev/ttyACM_RightLeader
+  port_right_follower: /dev/ttyACM_RightFollower
+  id: bimanual_coffee
+  prismatic_gripper: true
+  cameras:
+    # Top-down camera for scene overview
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    
+    # Wrist-mounted camera (left arm)
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    
+    # Wrist-mounted camera (right arm)
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    
+    # Aria glasses egocentric view with gaze visualization
+    # NOTE: Gaze-based object selection is TRAINED INTO the ACT policies
+    aria:
+      type: ros2
+      topic_name: /aria/eye_gaze/visualization_small
+      width: 640
+      height: 480
+      fps: 30
+
+# ============================================================================
+# Policy Servers Configuration
+# ============================================================================
+# Each server runs a different ACT policy for its specific sub-task
+# NOTE: Gaze-based object selection is trained INTO these policies (Aria camera input)
+policy_servers:
+  # Policy 1: Pick coffee pod (user gaze determines which pod via trained policy)
+  - name: pick_pod
+    host: localhost
+    port: 8080
+    policy_type: act
+    pretrained_path: RAPOB/coffee_pick_pod_act
+    actions_per_chunk: 50
+    device: cuda
+    # Task description (used for SARM text embedding)
+    task: "Pick up the coffee pod that the user is looking at and insert it into the machine"
+
+  # Policy 2: Pick cup and make coffee (user gaze determines which cup via trained policy)
+  - name: make_coffee
+    host: localhost
+    port: 8081
+    policy_type: act
+    pretrained_path: RAPOB/coffee_make_cup_act
+    actions_per_chunk: 50
+    device: cuda
+    # Task description (used for SARM text embedding)
+    task: "Pick up the cup that the user is looking at and make coffee"
+
+# ============================================================================
+# SARM Progress Monitoring Configuration
+# ============================================================================
+# SARM monitors task progress in real-time using CLIP embeddings
+# Different SARM models for each policy since they have different task contexts
+sarm:
+  # Policy-specific SARM models
+  policy_models:
+    pick_pod:
+      model_path: RAPOB/coffee_pick_pod_sarm
+      task_description: "Pick up the coffee pod that the user is looking at and insert it into the machine"
+    
+    make_coffee:
+      model_path: RAPOB/coffee_make_coffee_sarm
+      task_description: "Pick up the cup that the user is looking at and make coffee"
+  
+  # Device for inference
+  device: cuda
+  
+  # Progress threshold to switch from Policy 1 to Policy 2
+  # When SARM progress >= this threshold, switch to next policy
+  policy_switch_threshold: 0.95
+  
+  # Annotation scheme ('sparse' or 'dense')
+  scheme: sparse
+  
+  # ROS2 topics
+  progress_topic: /sarm/progress
+  stage_topic: /sarm/stage
+  stage_name_topic: /sarm/stage_name
+  
+  # Update rate
+  rate_hz: 10.0
+  
+  # Camera topics for SARM observation
+  camera_topics:
+    - /camera/top/image_raw
+
+# ============================================================================
+# RND Uncertainty Configuration (ARIA GLASSES ONLY)
+# ============================================================================
+# RND runs ONLY on the Aria glasses camera for gaze-based safety
+# When the user looks away or RND detects unfamiliar scene, robot pauses
+rnd:
+  # Path to pretrained RND model (trained on Aria camera data)
+  model_path: RAPOB/coffee_rnd_aria
+  
+  # Uncertainty threshold for triggering pause
+  threshold: 10.5
+  
+  # Enable automatic pause on high uncertainty
+  enable_pause: true
+  
+  # ROS2 topics
+  pause_topic: /uncertainty/pause
+  uncertainty_topic: /uncertainty/rolling
+  
+  # CRITICAL: RND uses ONLY the Aria glasses camera for gaze-based safety
+  camera_topic: /aria/eye_gaze/visualization_small
+
+# ============================================================================
+# Dataset Recording Configuration
+# ============================================================================
+dataset:
+  # HuggingFace repository ID for the dataset
+  repo_id: RAPOB/coffee_multi_policy_eval
+  
+  # Recording FPS
+  fps: 30
+  
+  # Push to HuggingFace Hub after recording
+  push_to_hub: true
+  
+  # Save as video (true) or individual frames (false)
+  use_videos: true
+  
+  # Privacy setting for Hub
+  private: false
+  
+  # Number of threads for image writing
+  image_writer_threads: 4
+  
+  # Root directory for local dataset storage
+  root: null  # Uses default ~/.cache/lerobot
+
+# ============================================================================
+# Orchestrator Configuration
+# ============================================================================
+orchestrator:
+  # Delay between state transitions (seconds)
+  transition_delay_s: 0.5
+  
+  # Maximum episode time (seconds)
+  max_episode_time_s: 300
+  
+  # Number of episodes to record
+  num_episodes: 10
+  
+  # Task descriptions for each policy (used for SARM text embeddings)
+  policy_1_task: "Pick up the coffee pod that the user is looking at and insert it into the machine"
+  policy_2_task: "Pick up the cup that the user is looking at and make coffee"
+
+# ============================================================================
+# Control Loop Configuration
+# ============================================================================
+# Control loop FPS
+fps: 30
+
+# Action queue threshold for observation sending
+chunk_size_threshold: 0.5
+
+# Action aggregation function
+aggregate_fn_name: weighted_average
+
+# Debug visualization
+debug_visualize: false

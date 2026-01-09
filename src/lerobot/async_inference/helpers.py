@@ -265,7 +265,7 @@ class FPSTracker:
 class RemotePolicyConfig:
     policy_type: str
     pretrained_name_or_path: str
-    lerobot_features: dict[str, PolicyFeature]
+    lerobot_features: dict[str, dict]  # LeRobot dataset feature specification
     actions_per_chunk: int
     device: str = "cpu"
     rename_map: dict[str, str] = field(default_factory=dict)

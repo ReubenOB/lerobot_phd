@@ -52,7 +52,7 @@ teleop:
 
 dataset:
   single_task: "bimanual_transfer_pen_holder"  # Task description
-  episode_time_s: 400
+  episode_time_s: 30
   reset_time_s: 10
   private: true
 
