@@ -1,0 +1,59 @@
+# Single Policy Test Configuration
+#
+# Minimal test for pause/start/reset via ROS2 services.
+# Uses movement buffer for reset trajectory playback.
+#
+# Run in three terminals:
+#   Terminal 1: python -m lerobot.async_inference.policy_server --host=localhost --port=8080 --fps=30
+#   Terminal 2: python -m lerobot.async_inference.single_policy_test --config_path=launch/single_policy_test.yaml  
+#   Terminal 3: ros2 service call /robot/start std_srvs/srv/Trigger
+
+# Robot configuration (bimanual SO101 follower)
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  # Ports (using udev symlinks)
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    # ROS2 camera configurations (launch vigil_camera first)
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+
+# Policy configuration
+policy_type: "act"
+pretrained_name_or_path: "RAPOB/act_v3_base"
+actions_per_chunk: 50
+policy_device: cuda
+
+# Server
+server_address: "localhost:8080"
+
+# Task
+task: "pick up the object"
+
+# Timing
+fps: 30
+chunk_size_threshold: 0.25
+
+# Movement buffer for reset
+buffer_max_frames: 3000
+reset_playback_speed: 0.5

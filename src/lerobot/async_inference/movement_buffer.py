@@ -224,30 +224,22 @@ class MovementBuffer:
         # Reverse the trajectory
         frames = frames[::-1]
         
-        # Subsample for playback speed adjustment
-        if subsample_factor is not None:
-            step = max(1, subsample_factor)
-        else:
-            # Calculate step based on playback speed
-            # Lower speed = more frames kept (smoother motion)
-            # playback_speed=0.5 means keep every frame (slow playback)
-            # playback_speed=1.0 means original recording speed
-            # Guard against playback_speed <= 0 to prevent division by zero
-            if playback_speed <= 0:
-                step = 1  # Keep all frames if invalid speed
-            elif playback_speed < 1.0:
-                step = max(1, int(1.0 / playback_speed))
-            else:
-                step = 1
-        
-        if step > 1:
-            frames = frames[::step]
-            logger.debug(f"Subsampled to {len(frames)} frames (step={step})")
+        # Duplicate frames for slower playback (instead of subsampling)
+        # playback_speed=0.5 means each frame is played twice (half speed)
+        # playback_speed=0.25 means each frame is played 4x (quarter speed)
+        if playback_speed is not None and playback_speed > 0 and playback_speed < 1.0:
+            repeat_factor = int(1.0 / playback_speed)
+            duplicated_frames = []
+            for frame in frames:
+                for _ in range(repeat_factor):
+                    duplicated_frames.append(frame)
+            frames = duplicated_frames
+            logger.info(f"Duplicated to {len(frames)} frames (repeat={repeat_factor}x) for slower playback")
         
         # Extract positions only
         trajectory = [frame.positions for frame in frames]
         
-        # Apply smoothing if requested
+        # Apply smoothing if requested (skip by default for accurate reset)
         if smooth_window > 1 and len(trajectory) > smooth_window:
             trajectory = self._smooth_trajectory(trajectory, smooth_window)
         

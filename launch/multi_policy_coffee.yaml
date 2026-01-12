@@ -81,75 +81,78 @@ policy_servers:
     task: "Pick up the coffee pod that the user is looking at and insert it into the machine"
 
   # Policy 2: Pick cup and make coffee (user gaze determines which cup via trained policy)
-  - name: make_coffee
-    host: localhost
-    port: 8081
-    policy_type: act
-    pretrained_path: RAPOB/coffee_make_cup_act
-    actions_per_chunk: 50
-    device: cuda
-    # Task description (used for SARM text embedding)
-    task: "Pick up the cup that the user is looking at and make coffee"
+  # COMMENTED OUT FOR SINGLE POLICY TESTING
+  # - name: make_coffee
+  #   host: localhost
+  #   port: 8081
+  #   policy_type: act
+  #   pretrained_path: RAPOB/coffee_make_cup_act
+  #   actions_per_chunk: 50
+  #   device: cuda
+  #   # Task description (used for SARM text embedding)
+  #   task: "Pick up the cup that the user is looking at and make coffee"
 
 # ============================================================================
 # SARM Progress Monitoring Configuration
 # ============================================================================
 # SARM monitors task progress in real-time using CLIP embeddings
 # Different SARM models for each policy since they have different task contexts
-sarm:
-  # Policy-specific SARM models
-  policy_models:
-    pick_pod:
-      model_path: RAPOB/coffee_pick_pod_sarm
-      task_description: "Pick up the coffee pod that the user is looking at and insert it into the machine"
-    
-    make_coffee:
-      model_path: RAPOB/coffee_make_coffee_sarm
-      task_description: "Pick up the cup that the user is looking at and make coffee"
-  
-  # Device for inference
-  device: cuda
-  
-  # Progress threshold to switch from Policy 1 to Policy 2
-  # When SARM progress >= this threshold, switch to next policy
-  policy_switch_threshold: 0.95
-  
-  # Annotation scheme ('sparse' or 'dense')
-  scheme: sparse
-  
-  # ROS2 topics
-  progress_topic: /sarm/progress
-  stage_topic: /sarm/stage
-  stage_name_topic: /sarm/stage_name
-  
-  # Update rate
-  rate_hz: 10.0
-  
-  # Camera topics for SARM observation
-  camera_topics:
-    - /camera/top/image_raw
+# COMMENTED OUT FOR SINGLE POLICY TESTING
+# sarm:
+#   # Policy-specific SARM models
+#   policy_models:
+#     pick_pod:
+#       model_path: RAPOB/coffee_pick_pod_sarm
+#       task_description: "Pick up the coffee pod that the user is looking at and insert it into the machine"
+#     
+#     make_coffee:
+#       model_path: RAPOB/coffee_make_coffee_sarm
+#       task_description: "Pick up the cup that the user is looking at and make coffee"
+#   
+#   # Device for inference
+#   device: cuda
+#   
+#   # Progress threshold to switch from Policy 1 to Policy 2
+#   # When SARM progress >= this threshold, switch to next policy
+#   policy_switch_threshold: 0.95
+#   
+#   # Annotation scheme ('sparse' or 'dense')
+#   scheme: sparse
+#   
+#   # ROS2 topics
+#   progress_topic: /sarm/progress
+#   stage_topic: /sarm/stage
+#   stage_name_topic: /sarm/stage_name
+#   
+#   # Update rate
+#   rate_hz: 10.0
+#   
+#   # Camera topics for SARM observation
+#   camera_topics:
+#     - /camera/top/image_raw
 
 # ============================================================================
 # RND Uncertainty Configuration (ARIA GLASSES ONLY)
 # ============================================================================
 # RND runs ONLY on the Aria glasses camera for gaze-based safety
 # When the user looks away or RND detects unfamiliar scene, robot pauses
-rnd:
-  # Path to pretrained RND model (trained on Aria camera data)
-  model_path: RAPOB/coffee_rnd_aria
-  
-  # Uncertainty threshold for triggering pause
-  threshold: 10.5
-  
-  # Enable automatic pause on high uncertainty
-  enable_pause: true
-  
-  # ROS2 topics
-  pause_topic: /uncertainty/pause
-  uncertainty_topic: /uncertainty/rolling
-  
-  # CRITICAL: RND uses ONLY the Aria glasses camera for gaze-based safety
-  camera_topic: /aria/eye_gaze/visualization_small
+# COMMENTED OUT FOR SINGLE POLICY TESTING
+# rnd:
+#   # Path to pretrained RND model (trained on Aria camera data)
+#   model_path: RAPOB/coffee_rnd_aria
+#   
+#   # Uncertainty threshold for triggering pause
+#   threshold: 10.5
+#   
+#   # Enable automatic pause on high uncertainty
+#   enable_pause: true
+#   
+#   # ROS2 topics
+#   pause_topic: /uncertainty/pause
+#   uncertainty_topic: /uncertainty/rolling
+#   
+#   # CRITICAL: RND uses ONLY the Aria glasses camera for gaze-based safety
+#   camera_topic: /aria/eye_gaze/visualization_small
 
 # ============================================================================
 # Dataset Recording Configuration
@@ -191,7 +194,7 @@ orchestrator:
   
   # Task descriptions for each policy (used for SARM text embeddings)
   policy_1_task: "Pick up the coffee pod that the user is looking at and insert it into the machine"
-  policy_2_task: "Pick up the cup that the user is looking at and make coffee"
+  # policy_2_task: "Pick up the cup that the user is looking at and make coffee"  # COMMENTED OUT FOR SINGLE POLICY
 
 # ============================================================================
 # Control Loop Configuration

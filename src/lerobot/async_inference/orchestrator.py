@@ -37,6 +37,10 @@ from typing import Any
 
 import draccus
 
+# Import camera configs to register them with draccus
+from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
+from lerobot.cameras.ros2.configuration_ros2 import ROS2CameraConfig  # noqa: F401
+
 from .configs_multi import MultiPolicyConfig, OrchestratorConfig
 from .data_recorder import MultiPolicyDataRecorder
 from .movement_buffer import MovementBuffer
