@@ -39,7 +39,7 @@ from .data_recorder import (
     MultiPolicyDataRecorder,
     RecordingMetadata,
 )
-from .multi_policy_client import RobotClientMulti
+from .multi_policy_client import MultiPolicyClient
 from .configs_multi import (
     MultiPolicyConfig,
     OrchestratorConfig,
@@ -63,7 +63,7 @@ __all__ = [
     "MultiPolicyDataRecorder",
     "RecordingMetadata",
     # Client
-    "RobotClientMulti",
+    "MultiPolicyClient",
     # Configs
     "MultiPolicyConfig",
     "OrchestratorConfig",

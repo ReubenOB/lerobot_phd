@@ -1,0 +1,70 @@
+# Multi-Policy Test Configuration
+#
+# Test configuration for multi-policy switching with ROS2 services.
+# Uses movement buffer for reset trajectory and automatic policy cycling.
+#
+# Run in four terminals:
+#   Terminal 1: python -m lerobot.async_inference.policy_server --host=localhost --port=8080 --fps=30
+#   Terminal 2: python -m lerobot.async_inference.policy_server --host=localhost --port=8081 --fps=30
+#   Terminal 3: python -m lerobot.async_inference.multi_policy_client --config_path=launch/multi_policy_test.yaml  
+#   Terminal 4: 
+#     ros2 service call /robot/start std_srvs/srv/Trigger
+#     ros2 service call /robot/switch_policy std_srvs/srv/Trigger  # Cycles to next policy
+
+# Robot configuration (bimanual SO101 follower)
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  # Ports (using udev symlinks)
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    # ROS2 camera configurations (launch vigil_camera first)
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+
+# Policy server configurations
+policy_servers:
+  # Policy 1: Primary task
+  - name: policy1
+    address: "localhost:8080"
+    pretrained_path: "RAPOB/act_v3_base"
+    policy_type: "act"
+    actions_per_chunk: 50
+    device: cuda
+    task: "pick up the first object"
+  
+  # Policy 2: Secondary task
+  - name: policy2
+    address: "localhost:8081"
+    pretrained_path: "RAPOB/act_v3_base"
+    policy_type: "act"
+    actions_per_chunk: 50
+    device: cuda
+    task: "pick up the second object"
+
+# Timing
+fps: 30
+chunk_size_threshold: 0.25
+
+# Movement buffer for reset
+buffer_max_frames: 3000
+reset_playback_speed: 0.5

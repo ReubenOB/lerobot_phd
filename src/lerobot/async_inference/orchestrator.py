@@ -44,7 +44,7 @@ from lerobot.cameras.ros2.configuration_ros2 import ROS2CameraConfig  # noqa: F4
 from .configs_multi import MultiPolicyConfig, OrchestratorConfig
 from .data_recorder import MultiPolicyDataRecorder
 from .movement_buffer import MovementBuffer
-from .multi_policy_client import RobotClientMulti
+from .multi_policy_client import MultiPolicyClient
 
 # Try to import ROS2
 try:
@@ -85,7 +85,7 @@ class MultiPolicyOrchestrator:
     Main orchestrator for multi-policy execution with bimanual robot.
     
     Coordinates:
-    - RobotClientMulti for policy execution on separate servers
+    - MultiPolicyClient for policy execution on separate servers
     - MultiPolicyDataRecorder for recording
     - SARM progress monitoring (via ROS2 topics)
     - RND uncertainty handling for pause/resume
@@ -154,7 +154,7 @@ class MultiPolicyOrchestrator:
     def _init_components(self):
         """Initialize sub-components."""
         # Robot client (multi-server)
-        self.robot_client = RobotClientMulti(self.config)
+        self.robot_client = MultiPolicyClient(self.config)
         
         # Data recorder
         robot_features = {
