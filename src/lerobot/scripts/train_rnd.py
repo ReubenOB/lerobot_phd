@@ -194,6 +194,7 @@ def train_rnd(
     device: str = "cuda",
     num_workers: int = 4,
     camera_key: str | None = None,
+    episodes: list[int] | None = None,
 ):
     """Train RND module on successful demonstrations.
     
@@ -219,12 +220,17 @@ def train_rnd(
     resnet, policy_config = load_policy_backbone(policy_path, dataset_repo_id, device)
 
     # Load dataset
-    logger.info(f"Loading dataset: {dataset_repo_id}")
+    if episodes:
+        logger.info(f"Loading dataset: {dataset_repo_id} (episodes: {episodes})")
+    else:
+        logger.info(f"Loading dataset: {dataset_repo_id} (all episodes)")
     image_transforms = make_image_transforms(image_size)
     lerobot_dataset = LeRobotDataset(
         repo_id=dataset_repo_id,
         image_transforms=image_transforms,
+        episodes=episodes,
     )
+    logger.info(f"Dataset loaded: {lerobot_dataset.num_episodes} episodes, {lerobot_dataset.num_frames} frames")
 
     # Determine dimensions from dataset
     sample = lerobot_dataset[0]
@@ -407,6 +413,13 @@ def main():
         default=None,
         help="Specific camera key to use (e.g., 'observation.images.aria'). If not set, uses first camera.",
     )
+    parser.add_argument(
+        "--episodes",
+        type=int,
+        nargs="+",
+        default=None,
+        help="Specific episode indices to train on (e.g., '0 1 2 3 4'). If not set, uses all episodes.",
+    )
 
     args = parser.parse_args()
 
@@ -421,6 +434,7 @@ def main():
         device=args.device,
         num_workers=args.num_workers,
         camera_key=args.camera_key,
+        episodes=args.episodes,
     )
 
 

@@ -1,0 +1,159 @@
+# RND Comparison Training Guide
+#
+# This configuration file documents both RND training approaches:
+# 1. Policy-Specific RND (original) - uses ACT policy's ResNet backbone
+# 2. Universal RND (new) - uses pretrained ImageNet backbone
+#
+# ============================================================================
+# COMPARISON TABLE
+# ============================================================================
+#
+# | Feature                    | Policy-Specific RND        | Universal RND              |
+# |----------------------------|----------------------------|----------------------------|
+# | Backbone                   | ACT policy ResNet          | Pretrained ImageNet ResNet |
+# | Requires policy weights    | Yes                        | No                         |
+# | Train once, use everywhere | No (per-policy)            | Yes (per-task)             |
+# | Detects policy uncertainty | Better                     | Good                       |
+# | Detects scene changes      | Good                       | Better                     |
+# | Task completion detection  | Possible                   | Better                     |
+# | User distraction detection | Good                       | Good                       |
+# | Deployment complexity      | Higher (N models)          | Lower (1 model)            |
+#
+# ============================================================================
+# USE CASES
+# ============================================================================
+#
+# Use Policy-Specific RND when:
+#   - You have a single policy and want maximum sensitivity
+#   - Detecting subtle action-level uncertainties is critical
+#   - You're already using the policy's features elsewhere
+#
+# Use Universal RND when:
+#   - Running multiple policies on the same task
+#   - Detecting task completion for policy switching
+#   - Environment-level novelty detection (object changes, lighting)
+#   - Simpler deployment is preferred
+#
+# ============================================================================
+# TRAINING COMMANDS
+# ============================================================================
+
+# ------------------------------------------------------------------------------
+# POLICY-SPECIFIC RND (Original)
+# ------------------------------------------------------------------------------
+# Requires a trained ACT policy. Uses the policy's ResNet backbone.
+
+# Step 1: Train ACT policy first
+# python -m lerobot.scripts.train --dataset.repo_id=RAPOB/my_dataset ...
+
+# Step 2: Train RND using policy backbone
+# python -m lerobot.scripts.train_rnd \
+#     --policy-path outputs/act/my_task/checkpoints/last/pretrained_model \
+#     --dataset-repo-id RAPOB/my_dataset \
+#     --camera-key observation.images.top \
+#     --output-dir outputs/rnd/policy_specific/my_task \
+#     --num-epochs 200
+
+# ------------------------------------------------------------------------------
+# UNIVERSAL RND (New - Policy Agnostic)
+# ------------------------------------------------------------------------------
+# Uses pretrained ImageNet ResNet. No policy dependency.
+
+# Basic training (all frames)
+# python -m lerobot.scripts.train_rnd_universal \
+#     --dataset-repo-id RAPOB/my_dataset \
+#     --camera-key observation.images.top \
+#     --output-dir outputs/rnd_universal/my_task \
+#     --backbone-type resnet18 \
+#     --num-epochs 200
+
+# Training for TASK END DETECTION (excludes start/end of episodes)
+# This makes RND detect when robot is at task boundaries
+# python -m lerobot.scripts.train_rnd_universal \
+#     --dataset-repo-id RAPOB/my_dataset \
+#     --camera-key observation.images.top \
+#     --output-dir outputs/rnd_universal/task_end \
+#     --exclude-start-pct 0.15 \
+#     --exclude-end-pct 0.15 \
+#     --num-epochs 200
+
+# Image-only mode (maximum generality, no state/action features)
+# python -m lerobot.scripts.train_rnd_universal \
+#     --dataset-repo-id RAPOB/my_dataset \
+#     --camera-key observation.images.top \
+#     --output-dir outputs/rnd_universal/image_only \
+#     --image-only \
+#     --num-epochs 200
+
+# ============================================================================
+# EXAMPLE: Bimanual Task End Detection Setup
+# ============================================================================
+#
+# This example shows how to train RND for detecting when a bimanual
+# pick-and-place task is complete, enabling automatic policy switching.
+#
+# Dataset: RAPOB/bimanual_pick_place (50 episodes)
+# Cameras: top, wrist_0, wrist_1
+# Task: Pick object and place in bin
+#
+# The RND is trained on "mid-task" frames only, so it reports high
+# uncertainty at task start (waiting) and task end (object placed).
+
+# Train Universal RND for task end detection on top camera
+train_command_task_end: |
+  python -m lerobot.scripts.train_rnd_universal \
+      --dataset-repo-id RAPOB/bimanual_pick_place \
+      --camera-key observation.images.top \
+      --output-dir outputs/rnd_universal/bimanual_task_end \
+      --exclude-start-pct 0.1 \
+      --exclude-end-pct 0.1 \
+      --backbone-type resnet18 \
+      --num-epochs 200 \
+      --batch-size 32
+
+# ============================================================================
+# ORCHESTRATOR INTEGRATION
+# ============================================================================
+#
+# Add to your orchestrator.yaml to enable task end detection:
+#
+# orchestrator:
+#   task_end:
+#     enabled: true
+#     rnd_model_path: outputs/rnd_universal/bimanual_task_end/rnd_universal.pth
+#     uncertainty_threshold: 2.0      # Normalized uncertainty threshold
+#     action_variance_threshold: 0.01 # Below this = robot is stationary
+#     min_sustained_frames: 10        # Consecutive frames to trigger
+#     auto_switch_policy: true        # Automatically switch when task ends
+#
+# The orchestrator will:
+# 1. Run RND on each observation
+# 2. Detect high uncertainty + low action variance
+# 3. Wait for sustained detection (min_sustained_frames)
+# 4. Automatically switch to next policy
+
+# ============================================================================
+# COMPARISON EXPERIMENT
+# ============================================================================
+#
+# To compare both approaches on the same dataset:
+#
+# 1. Train policy-specific RND
+# python -m lerobot.scripts.train_rnd \
+#     --policy-path RAPOB/my_policy \
+#     --dataset-repo-id RAPOB/my_dataset \
+#     --camera-key observation.images.top \
+#     --output-dir outputs/comparison/policy_specific
+#
+# 2. Train universal RND
+# python -m lerobot.scripts.train_rnd_universal \
+#     --dataset-repo-id RAPOB/my_dataset \
+#     --camera-key observation.images.top \
+#     --output-dir outputs/comparison/universal
+#
+# 3. Compare uncertainty distributions on test episodes
+# python -m lerobot.scripts.eval_rnd_comparison \
+#     --policy-specific-path outputs/comparison/policy_specific/rnd_model.pth \
+#     --universal-path outputs/comparison/universal/rnd_universal.pth \
+#     --test-dataset-repo-id RAPOB/my_test_dataset \
+#     --output-dir outputs/comparison/results

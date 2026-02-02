@@ -1,0 +1,120 @@
+# Orchestrator Configuration
+#
+# Configuration for the multi-policy orchestrator with optional SARM/RND/Aria.
+#
+# Run:
+#   Terminal 1: python -m lerobot.async_inference.policy_server --host=localhost --port=8080 --fps=30
+#   Terminal 2: python -m lerobot.async_inference.policy_server --host=localhost --port=8081 --fps=30
+#   Terminal 3: python -m lerobot.async_inference.orchestrator_v2 --config_path=launch/orchestrator.yaml
+#
+# Optional (for SARM/RND monitoring):
+#   ros2 run vigil_uncertainty sarm_progress_node
+#   ros2 run vigil_uncertainty rnd_uncertainty_node
+#
+# Optional (for Aria gesture control):
+#   ros2 run vigil_aria aria_streaming_node
+#   ros2 run vigil_aria gaze_gesture_node
+#   ros2 run vigil_aria blink_detector_node
+#
+# Control via ROS2 services:
+#   ros2 service call /orchestrator/start std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/pause std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/resume std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/reset std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/stop std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/switch_policy std_srvs/srv/Trigger
+
+# Robot configuration (bimanual SO101 follower)
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+
+# Policy server configurations
+policy_servers:
+  # Policy 1: Primary task
+  - name: policy1
+    address: "localhost:8080"
+    pretrained_path: "RAPOB/act_v3_base"
+    policy_type: "act"
+    actions_per_chunk: 100
+    device: cuda
+    task: "pick up the first object"
+  
+  # Policy 2: Secondary task
+  - name: policy2
+    address: "localhost:8081"
+    pretrained_path: "RAPOB/act_v3_base"
+    policy_type: "act"
+    actions_per_chunk: 100
+    device: cuda
+    task: "pick up the second object"
+
+# Client settings
+fps: 30
+environment_dt: 0.033
+buffer_max_frames: 3000
+chunk_size_threshold: 0.5
+
+# Orchestrator settings
+orchestrator:
+  # Episode settings
+  num_episodes: 1
+  max_episode_time_s: 300.0
+  transition_delay_s: 2.0
+  
+  # Reset settings
+  reset_playback_speed: 0.5
+  
+  # Task descriptions (for data recording)
+  policy_1_task: "pick up the coffee pod"
+  policy_2_task: "place the pod in the machine"
+  
+  # === SARM Progress Monitoring (OPTIONAL) ===
+  # Requires: ros2 run vigil_uncertainty sarm_progress_node
+  # Enables automatic policy switching based on task progress
+  sarm:
+    enabled: false  # Set to true to enable
+    progress_topic: "/sarm/progress"
+    stage_topic: "/sarm/stage"
+    stage_name_topic: "/sarm/stage_name"
+    policy_switch_threshold: 0.95  # Switch policy when progress >= this
+  
+  # === RND Uncertainty Monitoring (OPTIONAL) ===
+  # Requires: ros2 run vigil_uncertainty rnd_uncertainty_node
+  # Enables automatic pause when uncertainty is high
+  rnd:
+    enabled: false  # Set to true to enable
+    pause_topic: "/robot/pause"
+    uncertainty_topic: "/uncertainty/rolling"
+  
+  # === Aria Gesture Control (OPTIONAL) ===
+  # Requires: ros2 run vigil_aria aria_streaming_node + gaze_gesture_node + blink_detector_node
+  # Enables hands-free control via eye gaze and blinks
+  aria:
+    enabled: false  # Set to true to enable
+    gaze_topic: "/aria/gaze_gesture/detected"
+    eyes_closed_topic: "/aria/blink/eyes_closed_detected"
+    double_blink_topic: "/aria/blink/double_detected"

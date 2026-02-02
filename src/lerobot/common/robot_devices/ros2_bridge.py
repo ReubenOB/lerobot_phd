@@ -3,6 +3,7 @@
 ROS2 Bridge for LeRobot
 Integrates ROS2 publishing, subscribing, and MoveIt control directly into LeRobot robot classes.
 Provides FollowJointTrajectory action server for MoveIt integration.
+Supports optional control services and Aria gesture subscriptions.
 """
 
 import rclpy
@@ -13,11 +14,18 @@ from rclpy.executors import MultiThreadedExecutor
 from sensor_msgs.msg import JointState, Image
 from trajectory_msgs.msg import JointTrajectory
 from control_msgs.action import FollowJointTrajectory
-from std_msgs.msg import Header, Bool
+from std_msgs.msg import Header, Bool, String
 import threading
 import time
 from typing import Dict, Optional, Callable
 import numpy as np
+
+# Optional service imports
+try:
+    from std_srvs.srv import Trigger
+    SERVICES_AVAILABLE = True
+except ImportError:
+    SERVICES_AVAILABLE = False
 
 
 class LeRobotROS2Bridge:
@@ -39,9 +47,22 @@ class LeRobotROS2Bridge:
 
     def __init__(self, node_name: str = 'lerobot_bridge', joint_names: list = None, 
                  camera_names: list = None, subscribe_to_cameras: dict = None,
-                 send_action_callback: Callable = None, enable_uncertainty_pause: bool = True,
+                 send_action_callback: Callable = None, enable_pause: bool = True,
                  on_resume_callback: Callable = None, prismatic_gripper: bool = False,
-                 joint_offsets: dict = None):
+                 joint_offsets: dict = None,
+                 # Control service callbacks (optional)
+                 on_start: Callable = None,
+                 on_pause: Callable = None,
+                 on_resume: Callable = None,
+                 on_reset: Callable = None,
+                 on_stop: Callable = None,
+                 on_switch_policy: Callable = None,
+                 # Aria gesture callbacks (optional)
+                 on_gaze_left: Callable = None,
+                 on_gaze_right: Callable = None,
+                 on_eyes_closed: Callable = None,
+                 # State publisher callback (optional)
+                 get_state_string: Callable = None):
         """
         Initialize ROS2 bridge
 
@@ -51,19 +72,51 @@ class LeRobotROS2Bridge:
             camera_names: List of camera names to publish (e.g., ['top', 'wrist'])
             subscribe_to_cameras: Dict of camera_name -> topic_name to subscribe to
             send_action_callback: Callback function to send actions to robot (for MoveIt control)
-            enable_uncertainty_pause: Enable listening to /uncertainty/pause topic
+            enable_pause: Enable listening to /robot/pause topic
             on_resume_callback: Callback to call when resuming from pause (e.g., to reset policy)
             prismatic_gripper: If True, convert gripper values from 0-100 range to meters for prismatic joints
             joint_offsets: Dict of joint_name -> offset in degrees to correct calibration mismatch
+            
+            Control service callbacks (all optional, return tuple[bool, str]):
+                on_start: Called when /robot/start service is triggered
+                on_pause: Called when /robot/pause service is triggered
+                on_resume: Called when /robot/resume service is triggered
+                on_reset: Called when /robot/reset service is triggered
+                on_stop: Called when /robot/stop service is triggered
+                on_switch_policy: Called when /robot/switch_policy service is triggered
+            
+            Aria gesture callbacks (all optional):
+                on_gaze_left: Called when left gaze gesture detected
+                on_gaze_right: Called when right gaze gesture detected
+                on_eyes_closed: Called when eyes closed detected
+            
+            State publisher (optional):
+                get_state_string: Callback that returns current state string for /robot/state topic
         """
         self.joint_names = joint_names or []
         self.camera_names = camera_names or []
         self.subscribe_to_cameras = subscribe_to_cameras or {}
         self.send_action_callback = send_action_callback
-        self.enable_uncertainty_pause = enable_uncertainty_pause
+        self.enable_pause = enable_pause
         self.on_resume_callback = on_resume_callback
         self.prismatic_gripper = prismatic_gripper
         self.joint_offsets = joint_offsets or {}
+        
+        # Control service callbacks
+        self.on_start = on_start
+        self.on_pause = on_pause
+        self.on_resume = on_resume
+        self.on_reset = on_reset
+        self.on_stop = on_stop
+        self.on_switch_policy = on_switch_policy
+        
+        # Aria gesture callbacks
+        self.on_gaze_left = on_gaze_left
+        self.on_gaze_right = on_gaze_right
+        self.on_eyes_closed = on_eyes_closed
+        
+        # State publisher callback
+        self.get_state_string = get_state_string
         
         # Prismatic gripper conversion constants
         # LeRobot gripper: 0 (closed) to 100 (open)
@@ -84,9 +137,9 @@ class LeRobotROS2Bridge:
         self.bus_lock = threading.Lock()
         self.trajectory_executing = False
         
-        # Uncertainty-based pause state
-        self.uncertainty_paused = False
-        self.uncertainty_pause_lock = threading.Lock()
+        # Generic pause state (can be triggered by uncertainty, RND, Aria, manual, etc.)
+        self.pause_requested = False
+        self.pause_lock = threading.Lock()
         self._just_resumed = False  # Flag to indicate we just resumed from pause
         
         # Clean joint names (without .pos suffix) for ROS2
@@ -146,15 +199,39 @@ class LeRobotROS2Bridge:
                 callback_group=self.callback_group
             )
 
-            # Subscribe to uncertainty pause topic
-            if self.enable_uncertainty_pause:
+            # Subscribe to pause control topic (generic - works with uncertainty, RND, Aria, manual, etc.)
+            if self.enable_pause:
                 self.pause_subscriber = self.node.create_subscription(
                     Bool,
-                    '/uncertainty/pause',
-                    self._uncertainty_pause_callback,
+                    '/robot/pause',
+                    self._pause_callback,
                     10
                 )
-                print(f"[LeRobot] Uncertainty pause subscriber enabled")
+                print(f"[LeRobot] Pause control subscriber enabled on /robot/pause")
+            
+            # Create control services if callbacks are provided
+            if SERVICES_AVAILABLE and any([self.on_start, self.on_pause, self.on_resume, 
+                                           self.on_reset, self.on_stop, self.on_switch_policy]):
+                self._create_control_services()
+            
+            # Create Aria gesture subscriptions if callbacks are provided
+            if any([self.on_gaze_left, self.on_gaze_right]):
+                self.gaze_sub = self.node.create_subscription(
+                    String, "/aria/gaze_gesture/detected", self._gaze_callback, 10
+                )
+                print("[LeRobot] Aria gaze gesture subscriber enabled")
+            
+            if self.on_eyes_closed:
+                self.eyes_closed_sub = self.node.create_subscription(
+                    Bool, "/aria/blink/eyes_closed_detected", self._eyes_closed_callback, 10
+                )
+                print("[LeRobot] Aria eyes closed subscriber enabled")
+            
+            # Create state publisher if callback is provided
+            if self.get_state_string:
+                self.state_pub = self.node.create_publisher(String, "/robot/state", 10)
+                self.node.create_timer(0.5, self._publish_state)
+                print("[LeRobot] State publisher enabled on /robot/state")
 
             self.enabled = True
 
@@ -183,16 +260,16 @@ class LeRobotROS2Bridge:
         except Exception as e:
             print(f"[LeRobot] Spin error: {e}")
 
-    def _uncertainty_pause_callback(self, msg: Bool):
-        """Callback for uncertainty pause signal."""
-        with self.uncertainty_pause_lock:
-            was_paused = self.uncertainty_paused
-            self.uncertainty_paused = msg.data
+    def _pause_callback(self, msg: Bool):
+        """Callback for pause control signal (from uncertainty, RND, Aria, manual, etc.)."""
+        with self.pause_lock:
+            was_paused = self.pause_requested
+            self.pause_requested = msg.data
             
             if msg.data and not was_paused:
-                print("[LeRobot] ⚠️  HIGH UNCERTAINTY - Robot paused")
+                print("[LeRobot] ⏸️  PAUSE REQUESTED - Robot paused")
             elif not msg.data and was_paused:
-                print("[LeRobot] ✓ Uncertainty normalized - Robot resumed")
+                print("[LeRobot] ▶️  RESUME REQUESTED - Robot resumed")
                 self._just_resumed = True
                 # Call resume callback (e.g., to reset policy action queue)
                 if self.on_resume_callback:
@@ -202,9 +279,9 @@ class LeRobotROS2Bridge:
                         print(f"[LeRobot] Resume callback error: {e}")
 
     def is_paused(self) -> bool:
-        """Check if robot should be paused due to high uncertainty."""
-        with self.uncertainty_pause_lock:
-            return self.uncertainty_paused
+        """Check if robot should be paused (from any source: uncertainty, RND, Aria, manual, etc.)."""
+        with self.pause_lock:
+            return self.pause_requested
 
     def check_and_clear_resumed(self) -> bool:
         """Check if we just resumed from pause and clear the flag.
@@ -212,15 +289,36 @@ class LeRobotROS2Bridge:
         Returns:
             True if we just resumed (policy should be reset), False otherwise.
         """
-        with self.uncertainty_pause_lock:
+        with self.pause_lock:
             if self._just_resumed:
                 self._just_resumed = False
                 return True
             return False
 
+    def set_pause(self, paused: bool):
+        """Set pause state directly (alternative to topic-based control).
+        
+        Args:
+            paused: True to pause, False to resume
+        """
+        with self.pause_lock:
+            was_paused = self.pause_requested
+            self.pause_requested = paused
+            
+            if paused and not was_paused:
+                print("[LeRobot] ⏸️  PAUSE SET - Robot paused")
+            elif not paused and was_paused:
+                print("[LeRobot] ▶️  RESUME SET - Robot resumed")
+                self._just_resumed = True
+                if self.on_resume_callback:
+                    try:
+                        self.on_resume_callback()
+                    except Exception as e:
+                        print(f"[LeRobot] Resume callback error: {e}")
+    
     def wait_for_resume(self, timeout: float = None) -> bool:
         """
-        Block until uncertainty drops and pause is released.
+        Block until pause is released.
         
         Args:
             timeout: Maximum time to wait in seconds. None = wait forever.
@@ -234,6 +332,97 @@ class LeRobotROS2Bridge:
             if timeout and (time.time() - start_time) > timeout:
                 return False
         return True
+
+    # ========== Control Services ==========
+    
+    def _create_control_services(self):
+        """Create ROS2 services for robot control."""
+        services = []
+        if self.on_start:
+            self.node.create_service(Trigger, "/robot/start", self._handle_start)
+            services.append("start")
+        if self.on_pause:
+            self.node.create_service(Trigger, "/robot/pause", self._handle_pause)
+            services.append("pause")
+        if self.on_resume:
+            self.node.create_service(Trigger, "/robot/resume", self._handle_resume)
+            services.append("resume")
+        if self.on_reset:
+            self.node.create_service(Trigger, "/robot/reset", self._handle_reset)
+            services.append("reset")
+        if self.on_stop:
+            self.node.create_service(Trigger, "/robot/stop", self._handle_stop)
+            services.append("stop")
+        if self.on_switch_policy:
+            self.node.create_service(Trigger, "/robot/switch_policy", self._handle_switch_policy)
+            services.append("switch_policy")
+        
+        print(f"[LeRobot] Control services enabled: /robot/{{{','.join(services)}}}")
+    
+    def _handle_start(self, req, res):
+        res.success, res.message = self.on_start()
+        return res
+    
+    def _handle_pause(self, req, res):
+        res.success, res.message = self.on_pause()
+        return res
+    
+    def _handle_resume(self, req, res):
+        res.success, res.message = self.on_resume()
+        return res
+    
+    def _handle_reset(self, req, res):
+        res.success, res.message = self.on_reset()
+        return res
+    
+    def _handle_stop(self, req, res):
+        res.success, res.message = self.on_stop()
+        return res
+    
+    def _handle_switch_policy(self, req, res):
+        res.success, res.message = self.on_switch_policy()
+        return res
+    
+    # ========== Aria Gesture Callbacks ==========
+    
+    def _gaze_callback(self, msg):
+        """Handle Aria gaze gesture detection."""
+        gaze_direction = msg.data.lower()
+        
+        if gaze_direction == "left" and self.on_gaze_left:
+            print("[LeRobot] 👁️ LEFT GAZE detected")
+            try:
+                self.on_gaze_left()
+            except Exception as e:
+                print(f"[LeRobot] Gaze left callback error: {e}")
+                
+        elif gaze_direction == "right" and self.on_gaze_right:
+            print("[LeRobot] 👁️ RIGHT GAZE detected")
+            try:
+                self.on_gaze_right()
+            except Exception as e:
+                print(f"[LeRobot] Gaze right callback error: {e}")
+    
+    def _eyes_closed_callback(self, msg):
+        """Handle Aria eyes closed detection."""
+        if msg.data and self.on_eyes_closed:
+            print("[LeRobot] 👁️ EYES CLOSED detected")
+            try:
+                self.on_eyes_closed()
+            except Exception as e:
+                print(f"[LeRobot] Eyes closed callback error: {e}")
+    
+    # ========== State Publisher ==========
+    
+    def _publish_state(self):
+        """Publish robot state to /robot/state topic."""
+        if self.get_state_string and hasattr(self, 'state_pub'):
+            try:
+                msg = String()
+                msg.data = self.get_state_string()
+                self.state_pub.publish(msg)
+            except Exception as e:
+                print(f"[LeRobot] State publish error: {e}")
 
     def publish_joint_states(self, observation: Dict[str, float]):
         """
@@ -507,6 +696,77 @@ class LeRobotROS2Bridge:
             if self.camera_frames[camera_name] is not None:
                 return self.camera_frames[camera_name].copy()
         return None
+
+    def configure_control(self, 
+                          on_start: Callable = None,
+                          on_pause: Callable = None,
+                          on_resume: Callable = None,
+                          on_reset: Callable = None,
+                          on_stop: Callable = None,
+                          on_switch_policy: Callable = None,
+                          on_gaze_left: Callable = None,
+                          on_gaze_right: Callable = None,
+                          on_eyes_closed: Callable = None,
+                          get_state_string: Callable = None):
+        """
+        Configure control callbacks after initialization.
+        
+        Use this to add control services and Aria subscriptions after the bridge
+        has been created (e.g., from multi_policy_client).
+        
+        Args:
+            on_start: Callback for /robot/start service (returns tuple[bool, str])
+            on_pause: Callback for /robot/pause service
+            on_resume: Callback for /robot/resume service
+            on_reset: Callback for /robot/reset service
+            on_stop: Callback for /robot/stop service
+            on_switch_policy: Callback for /robot/switch_policy service
+            on_gaze_left: Callback for left gaze gesture
+            on_gaze_right: Callback for right gaze gesture
+            on_eyes_closed: Callback for eyes closed detection
+            get_state_string: Callback that returns state string for /robot/state topic
+        """
+        if not self.enabled or not self.node:
+            print("[LeRobot] Cannot configure control - ROS2 bridge not enabled")
+            return
+        
+        # Store callbacks
+        self.on_start = on_start
+        self.on_pause = on_pause
+        self.on_resume = on_resume
+        self.on_reset = on_reset
+        self.on_stop = on_stop
+        self.on_switch_policy = on_switch_policy
+        self.on_gaze_left = on_gaze_left
+        self.on_gaze_right = on_gaze_right
+        self.on_eyes_closed = on_eyes_closed
+        self.get_state_string = get_state_string
+        
+        # Create control services
+        if SERVICES_AVAILABLE and any([on_start, on_pause, on_resume, on_reset, on_stop, on_switch_policy]):
+            self._create_control_services()
+        
+        # Create Aria gesture subscriptions
+        if any([on_gaze_left, on_gaze_right]):
+            if not hasattr(self, 'gaze_sub'):
+                self.gaze_sub = self.node.create_subscription(
+                    String, "/aria/gaze_gesture/detected", self._gaze_callback, 10
+                )
+                print("[LeRobot] Aria gaze gesture subscriber enabled")
+        
+        if on_eyes_closed:
+            if not hasattr(self, 'eyes_closed_sub'):
+                self.eyes_closed_sub = self.node.create_subscription(
+                    Bool, "/aria/blink/eyes_closed_detected", self._eyes_closed_callback, 10
+                )
+                print("[LeRobot] Aria eyes closed subscriber enabled")
+        
+        # Create state publisher
+        if get_state_string:
+            if not hasattr(self, 'state_pub'):
+                self.state_pub = self.node.create_publisher(String, "/robot/state", 10)
+                self.node.create_timer(0.5, self._publish_state)
+                print("[LeRobot] State publisher enabled on /robot/state")
 
     def shutdown(self):
         """Shutdown ROS2 bridge"""

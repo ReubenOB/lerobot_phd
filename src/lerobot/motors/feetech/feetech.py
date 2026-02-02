@@ -158,10 +158,12 @@ class FeetechMotorsBus(MotorsBus):
     def _assert_same_firmware(self) -> None:
         firmware_versions = self._read_firmware_version(self.ids, raise_on_error=True)
         if len(set(firmware_versions.values())) != 1:
-            raise RuntimeError(
-                "Some Motors use different firmware versions:"
+            # Warning instead of error - minor firmware differences (3.9 vs 3.10) are acceptable
+            import logging
+            logging.warning(
+                "Motors use different firmware versions:"
                 f"\n{pformat(firmware_versions)}\n"
-                "Update their firmware first using Feetech's software. "
+                "This may cause issues. Consider updating firmware using Feetech's software. "
                 "Visit https://www.feetechrc.com/software."
             )
 

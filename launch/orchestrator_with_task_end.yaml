@@ -1,0 +1,112 @@
+# Multi-Policy Orchestrator with Task End Detection
+#
+# This configuration demonstrates automatic policy switching using
+# RND-based task end detection. When the first policy's task is complete
+# (detected via high uncertainty + low action variance), the orchestrator
+# automatically switches to the next policy.
+#
+# Run:
+#   Terminal 1: python -m lerobot.async_inference.policy_server --host=localhost --port=8080 --pretrained-path=RAPOB/pick_policy
+#   Terminal 2: python -m lerobot.async_inference.policy_server --host=localhost --port=8081 --pretrained-path=RAPOB/place_policy
+#   Terminal 3: python -m lerobot.async_inference.orchestrator --config_path=launch/orchestrator_with_task_end.yaml
+#
+# Prerequisites:
+#   1. Train universal RND for task end detection:
+#      python -m lerobot.scripts.train_rnd_universal \
+#          --dataset-repo-id RAPOB/my_dataset \
+#          --camera-key observation.images.top \
+#          --output-dir outputs/rnd_universal/task_end \
+#          --exclude-start-pct 0.1 \
+#          --exclude-end-pct 0.1
+
+# Robot configuration
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+
+# Policy servers
+policy_servers:
+  - name: pick_policy
+    address: "localhost:8080"
+    pretrained_path: "RAPOB/bimanual_pick"
+    policy_type: "act"
+    actions_per_chunk: 100
+    device: cuda
+    task: "pick up the object from the table"
+  
+  - name: place_policy
+    address: "localhost:8081"
+    pretrained_path: "RAPOB/bimanual_place"
+    policy_type: "act"
+    actions_per_chunk: 100
+    device: cuda
+    task: "place the object in the bin"
+
+# Timing
+fps: 30
+chunk_size_threshold: 0.01
+buffer_max_frames: 3000
+
+# Orchestrator settings
+orchestrator:
+  num_episodes: 10
+  max_episode_time_s: 120.0
+  transition_delay_s: 2.0
+  reset_playback_speed: 0.5
+  
+  # Task descriptions
+  policy_1_task: "pick up the object"
+  policy_2_task: "place the object"
+  
+  # SARM progress monitoring (disabled - using task end detection instead)
+  sarm:
+    enabled: false
+  
+  # RND pause/resume (for user distraction detection)
+  rnd:
+    enabled: true
+    pause_topic: /robot/pause
+    uncertainty_topic: /uncertainty/rolling
+  
+  # Aria gesture control
+  aria:
+    enabled: false
+  
+  # Task end detection (NEW - for automatic policy switching)
+  task_end:
+    enabled: true
+    # Path to trained universal RND model
+    rnd_model_path: outputs/rnd_universal/task_end/rnd_universal.pth
+    # Normalized uncertainty threshold (2.0 = 2 std above mean)
+    uncertainty_threshold: 2.0
+    # Action variance threshold (below this = robot is stationary)
+    action_variance_threshold: 0.01
+    # Consecutive frames needed to confirm task end
+    min_sustained_frames: 15
+    # Topic for publishing task end status
+    task_end_topic: /orchestrator/task_end
+    # Automatically switch to next policy when task ends
+    auto_switch_policy: true

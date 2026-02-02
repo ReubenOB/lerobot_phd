@@ -51,7 +51,7 @@ teleop:
 # Policy is specified via CLI: --policy.path="RAPOB/your_trained_policy"
 
 dataset:
-  single_task: "bimanual_transfer_pen_holder"  # Task description
+  single_task: "bimanual_pick_place"  # Task description
   episode_time_s: 30
   reset_time_s: 10
   private: true

@@ -29,17 +29,16 @@ from .movement_buffer import (
     create_movement_buffer,
     DEFAULT_JOINT_LIMITS,
 )
-from .orchestrator import (
+from .orchestrator_v2 import (
     MultiPolicyOrchestrator,
     OrchestratorNode,
     State,
-    run_orchestrator,
 )
 from .data_recorder import (
     MultiPolicyDataRecorder,
     RecordingMetadata,
 )
-from .multi_policy_client import MultiPolicyClient
+from .multi_policy_client import PolicyClient, PolicyServerSpec as PolicyServerSpecClient
 from .configs_multi import (
     MultiPolicyConfig,
     OrchestratorConfig,
@@ -58,12 +57,11 @@ __all__ = [
     "MultiPolicyOrchestrator",
     "OrchestratorNode",
     "State",
-    "run_orchestrator",
     # Data recorder
     "MultiPolicyDataRecorder",
     "RecordingMetadata",
     # Client
-    "MultiPolicyClient",
+    "PolicyClient",
     # Configs
     "MultiPolicyConfig",
     "OrchestratorConfig",

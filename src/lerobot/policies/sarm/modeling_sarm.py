@@ -479,6 +479,7 @@ class SARMRewardModel(PreTrainedPolicy):
         return_all_frames: bool = False,
         return_stages: bool = False,
         return_confidence: bool = False,
+        return_raw: bool = False,
         head_mode: str | None = "sparse",
         frame_index: int | None = None,
     ) -> np.ndarray | tuple:
@@ -497,11 +498,12 @@ class SARMRewardModel(PreTrainedPolicy):
             return_all_frames: If True, return rewards for all frames
             return_stages: If True, also return stage predictions
             return_confidence: If True, also return stage confidence
+            return_raw: If True, also return raw (stage_idx, tau_pred) for debugging
             head_mode: Which head to use ("sparse" or "dense")
             frame_index: Index of the target frame to extract (default: n_obs_steps).
 
         Returns:
-            Rewards and optionally stage probs/confidence.
+            Rewards and optionally stage probs/confidence/raw values.
         """
         if isinstance(text_embeddings, np.ndarray):
             text_embeddings = torch.tensor(text_embeddings, dtype=torch.float32)
@@ -604,6 +606,18 @@ class SARMRewardModel(PreTrainedPolicy):
             if single_sample:
                 conf = conf[0]
             outputs.append(conf)
+        if return_raw:
+            # Return raw stage_idx and tau_pred for debugging
+            if return_all_frames:
+                raw_stage = stage_idx.cpu().numpy()
+                raw_tau = tau_pred.cpu().numpy()
+            else:
+                raw_stage = stage_idx[:, frame_index].cpu().numpy()
+                raw_tau = tau_pred[:, frame_index].cpu().numpy()
+            if single_sample:
+                raw_stage = raw_stage[0] if raw_stage.ndim > 0 else raw_stage
+                raw_tau = raw_tau[0] if raw_tau.ndim > 0 else raw_tau
+            outputs.append((raw_stage, raw_tau))
 
         return outputs[0] if len(outputs) == 1 else tuple(outputs)
 

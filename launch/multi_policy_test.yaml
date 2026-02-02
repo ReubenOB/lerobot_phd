@@ -48,7 +48,7 @@ policy_servers:
     address: "localhost:8080"
     pretrained_path: "RAPOB/act_v3_base"
     policy_type: "act"
-    actions_per_chunk: 50
+    actions_per_chunk: 100
     device: cuda
     task: "pick up the first object"
   
@@ -57,13 +57,13 @@ policy_servers:
     address: "localhost:8081"
     pretrained_path: "RAPOB/act_v3_base"
     policy_type: "act"
-    actions_per_chunk: 50
+    actions_per_chunk: 100
     device: cuda
     task: "pick up the second object"
 
 # Timing
 fps: 30
-chunk_size_threshold: 0.25
+chunk_size_threshold: 0.01
 
 # Movement buffer for reset
 buffer_max_frames: 3000

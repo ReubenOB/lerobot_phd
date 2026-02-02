@@ -281,9 +281,18 @@ class RNDModule(nn.Module):
 
     def load(self, path: Path):
         """Load RND module state."""
-        checkpoint = torch.load(path, map_location=self.device)
+        checkpoint = torch.load(path, map_location=self.device, weights_only=False)
         self.predictor.load_state_dict(checkpoint['predictor_state_dict'])
         self.target.load_state_dict(checkpoint['target_state_dict'])
-        self.uncertainty_mean = checkpoint['uncertainty_mean'].to(self.device)
-        self.uncertainty_std = checkpoint['uncertainty_std'].to(self.device)
+        # Handle both tensor and float formats for backward compatibility
+        unc_mean = checkpoint['uncertainty_mean']
+        unc_std = checkpoint['uncertainty_std']
+        if isinstance(unc_mean, torch.Tensor):
+            self.uncertainty_mean = unc_mean.to(self.device)
+        else:
+            self.uncertainty_mean = torch.tensor(unc_mean, device=self.device)
+        if isinstance(unc_std, torch.Tensor):
+            self.uncertainty_std = unc_std.to(self.device)
+        else:
+            self.uncertainty_std = torch.tensor(unc_std, device=self.device)
         print(f"[RND] Loaded from {path}")
