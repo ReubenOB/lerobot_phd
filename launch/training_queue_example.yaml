@@ -1,0 +1,39 @@
+# Training Queue Configuration Example
+# Usage: python scripts/queue_training.py --config training_queue.yaml
+
+# Base training config to use for all jobs
+train_config: train_v3.yaml
+
+# Optional: specify work directory (default: current directory)
+# work_dir: /home/rapob/vigil_ws/src/deps/lerobot_phd
+
+# Optional: specify log directory (default: work_dir/logs/queue)
+# log_dir: /home/rapob/vigil_ws/src/deps/lerobot_phd/logs/training_queue
+
+# List of training jobs to run sequentially
+jobs:
+  # Job 1: Train on gaussian_blur dataset
+  - dataset: RAPOB/coffee_bimanual_aria_gaussian_blur_gold_2
+    output: aria_blur_train
+    policy_repo: RAPOB/act_coffee_aria_blur_v1
+    # Optional: override train_config for this specific job
+    # train_config: train_custom.yaml
+    # Optional: extra arguments passed to lerobot-train
+    # extra_args:
+    #   training.num_epochs: 100
+    #   policy.chunk_size: 50
+
+  # Job 2: Train on brightness_boost dataset
+  - dataset: RAPOB/coffee_bimanual_aria_brightness_boost_gold_2
+    output: aria_brightness_train
+    policy_repo: RAPOB/act_coffee_aria_brightness_v1
+
+  # Job 3: Train on gaussian_attention dataset
+  - dataset: RAPOB/coffee_bimanual_aria_gaussian_attention_gold_2
+    output: aria_attention_train
+    policy_repo: RAPOB/act_coffee_aria_attention_v1
+
+  # Job 4: Train on hard_cutout dataset
+  - dataset: RAPOB/coffee_bimanual_aria_hard_cutout_gold_2
+    output: aria_cutout_train
+    policy_repo: RAPOB/act_coffee_aria_cutout_v1

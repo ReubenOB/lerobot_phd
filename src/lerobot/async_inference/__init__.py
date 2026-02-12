@@ -16,10 +16,10 @@
 Async inference module for multi-policy orchestration.
 
 This module provides components for:
-- Multi-policy execution with state machine orchestration
+- Multi-policy execution with state machine orchestration (async and sync)
 - Movement buffer for trajectory recording and reverse playback
 - Data recording with rich metadata
-- Policy server communication via gRPC
+- Policy server communication via gRPC (async) or direct inference (sync)
 """
 
 from .movement_buffer import (
@@ -46,6 +46,15 @@ from .configs_multi import (
     SARMConfig,
 )
 
+# Sync orchestrator - lazy import to avoid circular issues when running as __main__
+def _lazy_sync_imports():
+    from .sync_orchestrator import (  # noqa: F811
+        SyncMultiPolicyOrchestrator,
+        SyncOrchestratorNode,
+        SyncMultiPolicyConfig,
+    )
+    return SyncMultiPolicyOrchestrator, SyncOrchestratorNode, SyncMultiPolicyConfig
+
 __all__ = [
     # Movement buffer
     "MovementBuffer",
@@ -53,10 +62,11 @@ __all__ = [
     "TrajectoryInterpolator",
     "create_movement_buffer",
     "DEFAULT_JOINT_LIMITS",
-    # Orchestrator
+    # Async orchestrator
     "MultiPolicyOrchestrator",
     "OrchestratorNode",
     "State",
+    # Sync orchestrator (import via: from lerobot.async_inference.sync_orchestrator import ...)
     # Data recorder
     "MultiPolicyDataRecorder",
     "RecordingMetadata",

@@ -1,0 +1,87 @@
+# Bimanual SO-101 Recording Config with All Aria Eye Gaze Streams
+# Usage:
+#   1. Launch cameras: ros2 launch vigil_camera camera_publisher_config.launch.py config:=$(ros2 pkg prefix vigil_camera)/share/vigil_camera/config/bimanual_camera_publisher.yaml
+#   2. Launch Aria streaming: ros2 launch vigil_aria aria_streaming.launch.py
+#   3. Launch eye gaze node: ros2 launch vigil_aria aria_eye_gaze.launch.py
+#   4. Record: lerobot-record --config_path=launch/bimanual_record_all_aria.yaml --dataset.repo_id="RAPOB/bimanual_dataset" --dataset.num_episode=20
+
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  # Arm IDs (must match calibration files)
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  # Ports (using udev symlinks)
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    # ROS2 camera configurations (launch vigil_camera first)
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    # Aria Eye Gaze Streams (all 640x480)
+    aria_gaussian_blur:
+      type: ros2
+      topic_name: /aria/eye_gaze/gaussian_blur
+      width: 640
+      height: 480
+      fps: 30
+    aria_brightness_boost:
+      type: ros2
+      topic_name: /aria/eye_gaze/brightness_boost
+      width: 640
+      height: 480
+      fps: 30
+    aria_gaussian_attention:
+      type: ros2
+      topic_name: /aria/eye_gaze/gaussian_attention
+      width: 640
+      height: 480
+      fps: 30
+    aria_hard_cutout:
+      type: ros2
+      topic_name: /aria/eye_gaze/hard_cutout
+      width: 640
+      height: 480
+      fps: 30
+
+teleop:
+  type: bi_so101_leader
+  # Arm IDs (must match calibration files)
+  left_arm_id: LEADER_0
+  right_arm_id: LEADER_1
+  # Ports (using udev symlinks)
+  left_arm_port: /dev/ttyACM_left_leader
+  right_arm_port: /dev/ttyACM_right_leader
+
+dataset:
+  single_task: "another_task"
+  episode_time_s: 60
+  reset_time_s: 40
+  private: true
+
+display_data: false
+
+# Example usage:
+# lerobot-record --config_path=launch/bimanual_record_all_aria.yaml --dataset.single_task="bimanual_pick_place_aria" --dataset.repo_id="RAPOB/bimanual_aria_all" --dataset.num_episode=50
+
+# Stream descriptions:
+# - gaussian_blur: Blurred periphery, sharp gaze region (default attention mode)
+# - brightness_boost: Darkened periphery, bright gaze region
+# - gaussian_attention: Mathematical Gaussian weighting from center
+# - hard_cutout: Binary masking - only gaze region visible

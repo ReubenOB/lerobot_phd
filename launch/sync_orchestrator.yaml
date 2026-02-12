@@ -1,0 +1,157 @@
+# Synchronous Multi-Policy Orchestrator Configuration
+#
+# Unlike the async orchestrator (which needs separate policy servers),
+# this loads ALL policies in one process. Zero network latency,
+# deterministic timing, but ~1-3s pause when switching policies.
+#
+# Run (single terminal!):
+#   python -m lerobot.async_inference.sync_orchestrator \
+#       --config_path=launch/sync_orchestrator.yaml
+#
+# Optional (for SARM/RND monitoring):
+#   ros2 run vigil_uncertainty sarm_progress_node
+#   ros2 run vigil_uncertainty rnd_uncertainty_node
+#
+# Optional (for Aria gesture control):
+#   ros2 run vigil_aria aria_streaming_node
+#   ros2 run vigil_aria eye_gaze_node
+#   ros2 run vigil_aria aria_gesture_node     # Combined: gaze gestures + eye closure detection
+#
+# Control via ROS2 services (same as async!):
+#   ros2 service call /orchestrator/start std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/pause std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/resume std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/reset std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/stop std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/switch_policy std_srvs/srv/Trigger
+
+# Robot configuration (bimanual SO101 follower)
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    aria_gaussian_attention:
+      type: ros2
+      topic_name: /aria/eye_gaze/gaussian_attention
+      width: 640
+      height: 480
+      fps: 30
+
+# Policies (loaded locally - NO separate servers needed!)
+# First policy starts on GPU, rest on CPU until switched
+policies:
+  # Policy 1: Primary task
+  - name: policy1
+    pretrained_path: "RAPOB/coffee_bimanual_aria_gausian_attention_all_v2_no_tf"
+    policy_type: "act"
+    actions_per_chunk: 100
+    device: cuda
+    task: "pick up the first object"
+    # keep_on_gpu: false  # Set true if you have enough VRAM for both models (~2x memory)
+  
+  # Policy 2: Secondary task
+  - name: policy2
+    pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_gaussian_attention_blue_no_tf"
+    policy_type: "act"
+    actions_per_chunk: 100
+    device: cuda
+    task: "pick up the second object"
+    # keep_on_gpu: false
+
+# Control loop settings
+fps: 30
+buffer_max_frames: 3000
+
+# Orchestrator settings
+orchestrator:
+  # Episode settings
+  num_episodes: 1
+  max_episode_time_s: 300.0
+  transition_delay_s: 2.0
+  
+  # Reset settings
+  reset_playback_speed: 0.5
+  rewind_seconds: 5.0          # Rewind 5 seconds on reset (0 = full rewind)
+  
+  # Use automatic mixed precision (faster inference on RTX 5080)
+  use_amp: false
+  
+  # Task descriptions (for data recording)
+  policy_1_task: "pick up the coffee pod"
+  policy_2_task: "place the pod in the machine"
+  
+  # === SARM Progress Monitoring (OPTIONAL) ===
+  sarm:
+    enabled: false
+    progress_topic: "/sarm/progress"
+    stage_topic: "/sarm/stage"
+    stage_name_topic: "/sarm/stage_name"
+    policy_switch_threshold: 0.95
+  
+  # === RND Uncertainty Monitoring (OPTIONAL) ===
+  rnd:
+    enabled: false
+    pause_topic: "/robot/pause"
+    uncertainty_topic: "/uncertainty/rolling"
+  
+  # === Aria Gesture Control (OPTIONAL) ===
+  # Gaze gesture mapping:
+  #   👁️ Gaze LEFT  (1.5s) → Pause
+  #   👁️ Gaze RIGHT (1.5s) → Start / Resume
+  #   😴 Eyes Closed (1.5s) → Rewind 5 seconds
+  #   ✨ Double Blink → Toggle start / pause / resume
+  aria:
+    enabled: true
+    gaze_topic: "/aria/gaze_gesture/detected"              # Trigger at 1.5s hold
+    eyes_closed_topic: "/aria/blink/eyes_closed_detected"  # Sustained closure → rewind 5s
+    double_blink_topic: "/aria/blink/double_detected"      # Double blink → toggle start/pause
+  
+  # === Task End Detection (OPTIONAL) ===
+  # Auto-switch policies when RND detects task completion
+  task_end:
+    enabled: false
+    rnd_model_path: "/home/rapob/vigil_ws/outputs/rnd_45ep_model"
+    uncertainty_threshold: 2.0
+
+  # === Rosbag Recording (OPTIONAL) ===
+  # Records all specified topics via `ros2 bag record` subprocess.
+  # No in-process video encoding — zero segfault risk.
+  # Bags saved to output_dir with auto-generated timestamped names.
+  rosbag:
+    enabled: true
+    output_dir: "/home/rapob/vigil_ws/outputs/rosbags"
+    storage: "mcap"                              # mcap or sqlite3
+    # Upload completed bags to HuggingFace Hub
+    upload_to_hub: true
+    repo_id: "RAPOB/sync_eval_rosbags"
+    private: true
+    # Topics to record (robot cameras + Aria gaze + joint states)
+    topics:
+      - /camera/top/image_raw
+      - /camera/wrist_0/image_raw
+      - /camera/wrist_1/image_raw
+      - /aria/eye_gaze/gaussian_attention
+      - /aria/eye_tracking/image_raw
+      - /joint_states

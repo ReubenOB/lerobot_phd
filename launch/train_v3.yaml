@@ -4,7 +4,7 @@
 dataset:
   repo_id: "RAPOB/Bi-manual_act_v3_transform"
   image_transforms:
-    enable: true
+    enable: false
     max_num_transforms: 4
     random_order: true
     tfs:
@@ -44,12 +44,12 @@ dataset:
 
 policy:
   type: act
-  repo_id: "RAPOB/act_v3_base"
+  repo_id: "RAPOB/coffee_bimanual_aria_stage_2_all_gaussian_attention"
   device: cuda
   private: true
 
 wandb:
-  enable: true
+  enable: false
 
-steps: 60000
+steps: 100000
 save_freq: 10000

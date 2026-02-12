@@ -193,6 +193,7 @@ class MovementBuffer:
         playback_speed: float = 0.5,
         subsample_factor: int | None = None,
         smooth_window: int = 5,
+        max_frames: int | None = None,
     ) -> list[dict[str, float]]:
         """
         Generate a reverse trajectory for robot reset.
@@ -204,6 +205,7 @@ class MovementBuffer:
             playback_speed: Speed multiplier (0.5 = half speed, fewer frames removed)
             subsample_factor: If provided, take every Nth frame (overrides playback_speed)
             smooth_window: Window size for moving average smoothing (0 to disable)
+            max_frames: If set, only use the last N frames for partial rewind
         
         Returns:
             List of position dicts in reverse order, ready for robot execution
@@ -218,6 +220,11 @@ class MovementBuffer:
             
             # Copy buffer data
             frames = list(self._buffer)
+        
+        # Partial rewind: only take the last N frames
+        if max_frames is not None and max_frames > 0 and max_frames < len(frames):
+            frames = frames[-max_frames:]
+            logger.info(f"Partial rewind: using last {max_frames} of {len(self._buffer)} frames")
         
         logger.info(f"Generating reverse trajectory from {len(frames)} frames")
         
@@ -255,6 +262,23 @@ class MovementBuffer:
             self._frame_count = 0
         
         logger.info("Movement buffer cleared")
+    
+    def trim_last_n(self, n: int) -> int:
+        """Remove the last N frames from the buffer (partial rewind cleanup).
+        
+        Args:
+            n: Number of frames to remove from the end.
+        
+        Returns:
+            Number of frames actually removed.
+        """
+        with self._lock:
+            to_remove = min(n, len(self._buffer))
+            for _ in range(to_remove):
+                self._buffer.pop()
+            self._frame_count = max(0, self._frame_count - to_remove)
+        logger.info(f"Trimmed {to_remove} frames from buffer ({len(self._buffer)} remaining)")
+        return to_remove
     
     def get_stats(self) -> dict[str, Any]:
         """

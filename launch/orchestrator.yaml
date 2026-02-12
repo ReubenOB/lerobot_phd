@@ -51,13 +51,19 @@ robot:
       width: 640
       height: 480
       fps: 30
+    aria_gaussian_attention:
+      type: ros2
+      topic_name: /aria/eye_gaze/gaussian_attention
+      width: 640
+      height: 480
+      fps: 30
 
 # Policy server configurations
 policy_servers:
   # Policy 1: Primary task
   - name: policy1
-    address: "localhost:8080"
-    pretrained_path: "RAPOB/act_v3_base"
+    address: "localhost:5050"
+    pretrained_path: "RAPOB/coffee_bimanual_aria_gausian_attention_all_v2_no_tf"
     policy_type: "act"
     actions_per_chunk: 100
     device: cuda
@@ -65,8 +71,8 @@ policy_servers:
   
   # Policy 2: Secondary task
   - name: policy2
-    address: "localhost:8081"
-    pretrained_path: "RAPOB/act_v3_base"
+    address: "localhost:5051"
+    pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_gaussian_attention_blue_no_tf"
     policy_type: "act"
     actions_per_chunk: 100
     device: cuda
@@ -76,7 +82,7 @@ policy_servers:
 fps: 30
 environment_dt: 0.033
 buffer_max_frames: 3000
-chunk_size_threshold: 0.5
+chunk_size_threshold: 0.01
 
 # Orchestrator settings
 orchestrator:
@@ -114,7 +120,7 @@ orchestrator:
   # Requires: ros2 run vigil_aria aria_streaming_node + gaze_gesture_node + blink_detector_node
   # Enables hands-free control via eye gaze and blinks
   aria:
-    enabled: false  # Set to true to enable
+    enabled: true  # Set to true to enable
     gaze_topic: "/aria/gaze_gesture/detected"
     eyes_closed_topic: "/aria/blink/eyes_closed_detected"
     double_blink_topic: "/aria/blink/double_detected"
