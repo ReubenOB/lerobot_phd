@@ -36,7 +36,7 @@ import os
 from pathlib import Path
 
 from lerobot.datasets.aggregate import aggregate_datasets
-from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata, HF_LEROBOT_HOME
 
 
 def merge_datasets(
@@ -65,6 +65,29 @@ def merge_datasets(
     
     logger.info(f"Merging {len(repo_ids)} datasets into: {output_repo_id}")
     logger.info(f"Source datasets: {repo_ids}")
+    
+    # Ensure datasets are available locally (download from Hub if needed)
+    logger.info("\n" + "="*60)
+    logger.info("Ensuring source datasets are available locally...")
+    logger.info("="*60)
+    
+    for i, repo_id in enumerate(repo_ids):
+        root = dataset_roots[i] if dataset_roots else None
+        local_root = Path(root) if root else HF_LEROBOT_HOME / repo_id
+        data_dir = local_root / "data"
+        
+        if not data_dir.exists() or not any(data_dir.rglob("*.parquet")):
+            logger.info(f"  [{i+1}] {repo_id}: Not found locally, downloading from Hub...")
+            try:
+                # LeRobotDataset auto-downloads data + videos from Hub if missing
+                ds = LeRobotDataset(repo_id=repo_id, root=root)
+                logger.info(f"        ✓ Downloaded: {ds.meta.total_episodes} episodes, {ds.meta.total_frames} frames")
+                del ds  # Free memory
+            except Exception as e:
+                logger.error(f"  ✗ Failed to download {repo_id}: {e}")
+                raise
+        else:
+            logger.info(f"  [{i+1}] {repo_id}: Found locally at {local_root}")
     
     # Validate datasets before merging
     logger.info("\n" + "="*60)

@@ -58,6 +58,12 @@ robot:
       width: 640
       height: 480
       fps: 30
+    # aria_hard_cutout:
+    #   type: ros2
+    #   topic_name: /aria/eye_gaze/hard_cutout
+    #   width: 640
+    #   height: 480
+    #   fps: 30
 
 # Policies (loaded locally - NO separate servers needed!)
 # First policy starts on GPU, rest on CPU until switched
@@ -66,16 +72,17 @@ policies:
   - name: policy1
     pretrained_path: "RAPOB/coffee_bimanual_aria_gausian_attention_all_v2_no_tf"
     policy_type: "act"
-    actions_per_chunk: 100
+    actions_per_chunk: 80
     device: cuda
     task: "pick up the first object"
     # keep_on_gpu: false  # Set true if you have enough VRAM for both models (~2x memory)
   
   # Policy 2: Secondary task
   - name: policy2
+    # pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_all_v2_gaussian_attention_75"
     pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_gaussian_attention_blue_no_tf"
     policy_type: "act"
-    actions_per_chunk: 100
+    actions_per_chunk: 80
     device: cuda
     task: "pick up the second object"
     # keep_on_gpu: false
@@ -128,12 +135,28 @@ orchestrator:
     eyes_closed_topic: "/aria/blink/eyes_closed_detected"  # Sustained closure → rewind 5s
     double_blink_topic: "/aria/blink/double_detected"      # Double blink → toggle start/pause
   
-  # === Task End Detection (OPTIONAL) ===
-  # Auto-switch policies when RND detects task completion
+  # === Task End Detection + Attention Monitoring (OPTIONAL) ===
+  # Dual policy-specific RND models with DIFFERENT roles:
+  #   - Top camera:  gradient completion → RNDCompletionDetector (policy 1 only)
+  #     Monitors uncertainty gradient; when it flatlines → task done → switch policy
+  #   - Aria camera: raw uncertainty → attention monitoring (always active)
+  #     High uncertainty = operator not paying attention → auto-pause
+  #     Drops back below threshold → auto-resume
   task_end:
     enabled: false
-    rnd_model_path: "/home/rapob/vigil_ws/outputs/rnd_45ep_model"
-    uncertainty_threshold: 2.0
+    top_rnd_model_path: "/home/rapob/vigil_ws/outputs/rnd_policy_specific/coffee_top"
+    aria_rnd_model_path: "/home/rapob/vigil_ws/outputs/rnd_policy_specific/coffee_aria"
+    top_camera_key: "observation.images.top"
+    aria_camera_key: "observation.images.aria_gaussian_attention"
+    # Top: gradient completion (task end)
+    gradient_window: 30
+    stability_window: 45
+    min_frames: 150
+    auto_switch_policy: true
+    # Aria: attention monitoring (raw uncertainty)
+    aria_uncertainty_threshold: 2.0    # normalized; above this → pause
+    aria_sustained_frames: 15          # consecutive high-unc frames before pause
+    aria_resume_threshold: 1.0         # below this → auto-resume
 
   # === Rosbag Recording (OPTIONAL) ===
   # Records all specified topics via `ros2 bag record` subprocess.
@@ -145,7 +168,7 @@ orchestrator:
     storage: "mcap"                              # mcap or sqlite3
     # Upload completed bags to HuggingFace Hub
     upload_to_hub: true
-    repo_id: "RAPOB/sync_eval_rosbags"
+    repo_id: "RAPOB/sync_eval_rosbags_vid_v2_fixed_b"
     private: true
     # Topics to record (robot cameras + Aria gaze + joint states)
     topics:

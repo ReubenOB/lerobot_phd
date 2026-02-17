@@ -185,7 +185,7 @@ class RNDDataset(torch.utils.data.Dataset):
 
 def train_rnd(
     policy_path: str | Path,
-    dataset_repo_id: str,
+    dataset_repo_id: str | list[str],
     output_dir: Path,
     num_epochs: int = 200,
     batch_size: int = 32,
@@ -200,7 +200,8 @@ def train_rnd(
     
     Args:
         policy_path: Path to trained policy (local dir or HuggingFace repo).
-        dataset_repo_id: Dataset repo ID (e.g., 'RAPOB/aria_50_2_cam').
+        dataset_repo_id: Dataset repo ID or list of IDs for multi-dataset training.
+                        e.g., 'RAPOB/aria_50_2_cam' or ['RAPOB/dataset1', 'RAPOB/dataset2']
         output_dir: Directory to save trained RND model.
         num_epochs: Number of training epochs.
         batch_size: Training batch size.
@@ -210,27 +211,46 @@ def train_rnd(
         num_workers: Number of dataloader workers.
         camera_key: Specific camera to use (e.g., 'observation.images.aria').
                    If None, uses the first available camera.
+        episodes: Episode indices to use (only applied to single-dataset mode).
     """
 
     output_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(device if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
 
-    # Load policy backbone (same way as record.py)
-    resnet, policy_config = load_policy_backbone(policy_path, dataset_repo_id, device)
-
-    # Load dataset
-    if episodes:
-        logger.info(f"Loading dataset: {dataset_repo_id} (episodes: {episodes})")
+    # Normalize dataset_repo_id to a list
+    if isinstance(dataset_repo_id, str):
+        dataset_repo_ids = [dataset_repo_id]
     else:
-        logger.info(f"Loading dataset: {dataset_repo_id} (all episodes)")
+        dataset_repo_ids = list(dataset_repo_id)
+
+    # Load policy backbone using the FIRST dataset for metadata
+    resnet, policy_config = load_policy_backbone(policy_path, dataset_repo_ids[0], device)
+
+    # Load dataset(s)
     image_transforms = make_image_transforms(image_size)
-    lerobot_dataset = LeRobotDataset(
-        repo_id=dataset_repo_id,
-        image_transforms=image_transforms,
-        episodes=episodes,
-    )
-    logger.info(f"Dataset loaded: {lerobot_dataset.num_episodes} episodes, {lerobot_dataset.num_frames} frames")
+    all_datasets = []
+    total_episodes = 0
+    total_frames = 0
+    for repo_id in dataset_repo_ids:
+        ep = episodes if len(dataset_repo_ids) == 1 else None  # episodes only for single-dataset
+        if ep:
+            logger.info(f"Loading dataset: {repo_id} (episodes: {ep})")
+        else:
+            logger.info(f"Loading dataset: {repo_id} (all episodes)")
+        ds = LeRobotDataset(
+            repo_id=repo_id,
+            image_transforms=image_transforms,
+            episodes=ep,
+        )
+        all_datasets.append(ds)
+        total_episodes += ds.num_episodes
+        total_frames += ds.num_frames
+        logger.info(f"  → {ds.num_episodes} episodes, {ds.num_frames} frames")
+
+    # Use first dataset as the reference for metadata
+    lerobot_dataset = all_datasets[0]
+    logger.info(f"Total across all datasets: {total_episodes} episodes, {total_frames} frames")
 
     # Determine dimensions from dataset
     sample = lerobot_dataset[0]
@@ -270,8 +290,14 @@ def train_rnd(
         logger.info(f"ResNet feature dimension: {resnet_dim}")
         logger.info(f"Total RND input dimension: {resnet_dim + state_dim + action_dim}")
 
-    # Create dataloader
-    rnd_dataset = RNDDataset(lerobot_dataset, camera_key=camera_key)
+    # Create dataloader (with multi-dataset support)
+    if len(all_datasets) == 1:
+        rnd_dataset = RNDDataset(all_datasets[0], camera_key=camera_key)
+    else:
+        from torch.utils.data import ConcatDataset
+        rnd_datasets = [RNDDataset(ds, camera_key=camera_key) for ds in all_datasets]
+        rnd_dataset = ConcatDataset(rnd_datasets)
+        logger.info(f"Concatenated {len(all_datasets)} datasets → {len(rnd_dataset)} total samples")
     dataloader = DataLoader(
         rnd_dataset,
         batch_size=batch_size,
@@ -328,12 +354,21 @@ def train_rnd(
     logger.info(f"RND model saved to {output_path}")
 
     # Save training info
+    # For ConcatDataset, get camera info from first sub-dataset
+    if hasattr(rnd_dataset, 'camera_key'):
+        _camera_key = rnd_dataset.camera_key
+        _camera_keys = list(rnd_dataset.camera_keys)
+    else:
+        # ConcatDataset — get from first dataset
+        _first = rnd_dataset.datasets[0] if hasattr(rnd_dataset, 'datasets') else rnd_dataset
+        _camera_key = getattr(_first, 'camera_key', camera_key)
+        _camera_keys = list(getattr(_first, 'camera_keys', []))
     info = {
-        "dataset_repo_id": dataset_repo_id,
+        "dataset_repo_id": dataset_repo_ids if len(dataset_repo_ids) > 1 else dataset_repo_ids[0],
         "policy_path": str(policy_path),
         "policy_type": policy_config.type if hasattr(policy_config, "type") else "unknown",
-        "camera_key": rnd_dataset.camera_key,
-        "available_cameras": list(rnd_dataset.camera_keys),
+        "camera_key": _camera_key,
+        "available_cameras": _camera_keys,
         "state_dim": state_dim,
         "action_dim": action_dim,
         "image_size": image_size,
@@ -361,8 +396,10 @@ def main():
     parser.add_argument(
         "--dataset-repo-id",
         type=str,
+        nargs="+",
         required=True,
-        help="Dataset repo ID (e.g., 'username/dataset_name' or 'lerobot/pusht')",
+        help="Dataset repo ID(s). For multi-dataset training, pass multiple: "
+             "--dataset-repo-id RAPOB/dataset1 RAPOB/dataset2",
     )
     parser.add_argument(
         "--output-dir",

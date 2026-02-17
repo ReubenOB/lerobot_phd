@@ -137,15 +137,41 @@ class AriaConfig:
 
 @dataclass
 class TaskEndConfig:
-    """Task end detection configuration (optional)."""
+    """Dual RND monitoring (optional).
+
+    Two policy-specific RND models with distinct roles:
+
+      TOP CAMERA → Gradient completion (task end detection)
+        Monitors rate-of-change of uncertainty on the top camera.
+        When gradient stays near zero → task is done → auto-switch policy.
+        Only runs during policy 1 (disabled after switch).
+
+      ARIA CAMERA → Raw uncertainty (attention monitoring)
+        Monitors whether the operator's gaze is in-distribution.
+        High uncertainty → operator not paying attention → auto-pause.
+        Runs during ALL policies (always active).
+    """
 
     enabled: bool = False
-    rnd_model_path: str = ""
-    uncertainty_threshold: float = 2.0
-    action_variance_threshold: float = 0.01
-    min_sustained_frames: int = 10
-    task_end_topic: str = "/orchestrator/task_end"
+    # Model paths (policy-specific checkpoints from train_rnd.py)
+    top_rnd_model_path: str = ""
+    aria_rnd_model_path: str = ""
+    # Camera observation keys
+    top_camera_key: str = "observation.images.top"
+    aria_camera_key: str = "observation.images.aria_gaussian_attention"
+    # Top camera: gradient completion (RNDCompletionDetector)
+    gradient_window: int = 30       # ~1s at 30fps
+    stability_window: int = 45      # ~1.5s sustained low-gradient
+    min_frames: int = 150           # ~5s minimum before detection
     auto_switch_policy: bool = True
+    # Aria camera: attention monitoring (raw uncertainty)
+    aria_uncertainty_threshold: float = 2.0  # normalized; above this → pause
+    aria_sustained_frames: int = 15          # consecutive high-unc frames to trigger
+    aria_resume_threshold: float = 1.0       # below this → auto-resume
+    # ROS2 topics
+    task_end_topic: str = "/orchestrator/task_end"
+    completion_topic: str = "/orchestrator/completion"   # top gradient diagnostics
+    attention_topic: str = "/orchestrator/attention"     # aria uncertainty diagnostics
 
 
 @dataclass
@@ -361,8 +387,7 @@ class SyncMultiPolicyOrchestrator:
         self._rnd_uncertainty = 0.0
         self._rnd_paused = False
 
-        # Task end detector (optional)
-        self._task_end_detector = None
+        # Task end detection (optional, dual RND)
         self._task_end_detected = False
 
         # Robot
@@ -387,6 +412,7 @@ class SyncMultiPolicyOrchestrator:
         self._rosbag_cfg = self.orch_config.rosbag
         self._rosbag_proc: subprocess.Popen | None = None
         self._rosbag_path: Path | None = None
+        self._stop_service_called = False  # Only save rosbag if /stop is called
 
         # Setup task end detector if configured
         if self.orch_config.task_end.enabled:
@@ -472,32 +498,59 @@ class SyncMultiPolicyOrchestrator:
         return loaded
 
     def _init_task_end_detector(self):
-        """Initialize task end detector with RND model."""
-        try:
-            from lerobot.common.uncertainty import RNDModuleUniversal, TaskEndDetector
+        """Initialize dual RND detectors.
 
-            task_end_cfg = self.orch_config.task_end
-            rnd_path = Path(task_end_cfg.rnd_model_path)
+        Top camera  → RNDCompletionDetector (gradient → task end, policy 1 only)
+        Aria camera → raw uncertainty monitor (attention, always active)
+        """
+        task_end_cfg = self.orch_config.task_end
 
-            if not rnd_path.exists():
-                logger.warning(f"Task end RND model not found: {rnd_path}")
-                return
+        # --- Top camera: gradient-based task completion ---
+        self._top_rnd = None
+        self._completion_detector = None
+        if task_end_cfg.top_rnd_model_path:
+            top_path = Path(task_end_cfg.top_rnd_model_path)
+            if top_path.is_dir():
+                top_path = top_path / "rnd_model.pth"
+            if top_path.exists():
+                try:
+                    from lerobot.common.uncertainty import RNDModule
+                    from lerobot.common.uncertainty.rnd_completion_detector import RNDCompletionDetector
 
-            logger.info(f"Loading task end RND model from {rnd_path}")
-            rnd_module = RNDModuleUniversal.load(rnd_path, device="cuda")
+                    logger.info(f"Loading TOP RND (completion) from {top_path}")
+                    top_rnd = RNDModule.load_from_checkpoint(top_path, device="cuda")
+                    self._completion_detector = RNDCompletionDetector(
+                        rnd_module=top_rnd,
+                        gradient_window=task_end_cfg.gradient_window,
+                        stability_window=task_end_cfg.stability_window,
+                        min_frames=task_end_cfg.min_frames,
+                    )
+                    self._top_rnd = top_rnd
+                    logger.info("✅ Top camera RND (gradient completion) initialized")
+                except Exception as e:
+                    logger.error(f"Failed to load top RND: {e}")
+            else:
+                logger.warning(f"Top RND model not found: {top_path}")
 
-            self._task_end_detector = TaskEndDetector(
-                rnd_module=rnd_module,
-                uncertainty_threshold=task_end_cfg.uncertainty_threshold,
-                action_variance_threshold=task_end_cfg.action_variance_threshold,
-                min_sustained_frames=task_end_cfg.min_sustained_frames,
-                device="cuda",
-            )
-            logger.info("Task end detector initialized")
+        # --- Aria camera: raw uncertainty for attention monitoring ---
+        self._aria_rnd = None
+        self._aria_high_unc_count = 0
+        self._aria_paused_by_attention = False
+        if task_end_cfg.aria_rnd_model_path:
+            aria_path = Path(task_end_cfg.aria_rnd_model_path)
+            if aria_path.is_dir():
+                aria_path = aria_path / "rnd_model.pth"
+            if aria_path.exists():
+                try:
+                    from lerobot.common.uncertainty import RNDModule
 
-        except Exception as e:
-            logger.error(f"Failed to initialize task end detector: {e}")
-            self._task_end_detector = None
+                    logger.info(f"Loading ARIA RND (attention) from {aria_path}")
+                    self._aria_rnd = RNDModule.load_from_checkpoint(aria_path, device="cuda")
+                    logger.info("✅ Aria camera RND (attention monitoring) initialized")
+                except Exception as e:
+                    logger.error(f"Failed to load aria RND: {e}")
+            else:
+                logger.warning(f"Aria RND model not found: {aria_path}")
 
     # ========== Rosbag Recording ==========
 
@@ -548,6 +601,12 @@ class SyncMultiPolicyOrchestrator:
             return
 
         import signal
+
+        # Check if already dead
+        if self._rosbag_proc.poll() is not None:
+            logger.info(f"Rosbag process already exited (rc={self._rosbag_proc.returncode})")
+            self._rosbag_proc = None
+            return
 
         logger.info("Stopping rosbag recording (waiting for zstd compression)...")
         try:
@@ -670,9 +729,12 @@ class SyncMultiPolicyOrchestrator:
         elif new_state == State.COMPLETE:
             if self.buffer.is_recording:
                 self.buffer.stop_recording()
-            # Stop rosbag and upload on completion
-            self._stop_rosbag()
-            self._upload_rosbag()
+            # Only save rosbag if /stop service was explicitly called
+            if self._stop_service_called:
+                self._stop_rosbag()
+                self._upload_rosbag()
+            elif self._rosbag_proc is not None:
+                self._stop_and_delete_rosbag()
 
     # ========== ROS2 Setup ==========
 
@@ -762,11 +824,8 @@ class SyncMultiPolicyOrchestrator:
                 f"Aria subscriptions: {self.orch_config.aria.gaze_topic}"
             )
 
-        # Task end publisher (optional)
-        if (
-            self.orch_config.task_end.enabled
-            and self._task_end_detector is not None
-        ):
+        # Task end publishers (optional - dual RND models)
+        if self.orch_config.task_end.enabled:
             from std_msgs.msg import Float32MultiArray
 
             self._task_end_pub = node.create_publisher(
@@ -774,9 +833,24 @@ class SyncMultiPolicyOrchestrator:
                 self.orch_config.task_end.task_end_topic,
                 10,
             )
-            logger.info(
-                f"Task end detection enabled, publishing to {self.orch_config.task_end.task_end_topic}"
-            )
+            if self._completion_detector is not None:
+                self._completion_pub = node.create_publisher(
+                    Float32MultiArray,
+                    self.orch_config.task_end.completion_topic,
+                    10,
+                )
+                logger.info(
+                    f"Top RND completion → {self.orch_config.task_end.completion_topic}"
+                )
+            if self._aria_rnd is not None:
+                self._attention_pub = node.create_publisher(
+                    Float32MultiArray,
+                    self.orch_config.task_end.attention_topic,
+                    10,
+                )
+                logger.info(
+                    f"Aria RND attention → {self.orch_config.task_end.attention_topic}"
+                )
 
     # ========== ROS2 Service Handlers ==========
 
@@ -902,11 +976,54 @@ class SyncMultiPolicyOrchestrator:
         return False, f"Cannot reset from {self.state.value}"
 
     def handle_stop(self) -> tuple[bool, str]:
-        """Stop the orchestrator. Stops rosbag and uploads if configured."""
-        self._stop_rosbag()
-        self._upload_rosbag()
-        self._running = False
+        """Stop the orchestrator. Rosbag flush + upload runs in background."""
+        self._stop_service_called = True  # Mark explicit stop (keeps rosbag)
+        self._running = False  # Signal control loop to exit immediately
+
+        if self._rosbag_cfg.enabled and self._rosbag_proc is not None:
+            # Do the slow rosbag stop + upload in a background thread
+            # so the service call returns instantly
+            import threading
+            threading.Thread(
+                target=self._stop_and_upload_rosbag,
+                name="rosbag_cleanup",
+                daemon=True,
+            ).start()
+            return True, "Stopping (rosbag flushing in background)"
+
         return True, "Stopping"
+
+    def _stop_and_upload_rosbag(self):
+        """Background thread: stop rosbag, upload, log completion."""
+        try:
+            self._stop_rosbag()
+            self._upload_rosbag()
+        except Exception as e:
+            logger.error(f"Rosbag cleanup error: {e}")
+
+    def _stop_and_delete_rosbag(self):
+        """Stop rosbag recording and delete the bag (stop service was NOT called)."""
+        try:
+            self._stop_rosbag()
+            self._delete_rosbag()
+        except Exception as e:
+            logger.error(f"Rosbag delete error: {e}")
+
+    def _delete_rosbag(self):
+        """Delete the rosbag directory (recording discarded)."""
+        if self._rosbag_path is None or not self._rosbag_path.exists():
+            return
+        import shutil
+        bag_size_mb = sum(
+            f.stat().st_size for f in self._rosbag_path.rglob("*") if f.is_file()
+        ) / (1024 * 1024)
+        logger.info(
+            f"Deleting rosbag (stop service not called): "
+            f"{self._rosbag_path.name} ({bag_size_mb:.0f}MB)"
+        )
+        shutil.rmtree(self._rosbag_path, ignore_errors=True)
+        self._rosbag_path = None
+        logger.info("Rosbag deleted")
 
     def handle_switch_policy(self, policy_idx: Optional[int] = None) -> tuple[bool, str]:
         """
@@ -1107,53 +1224,146 @@ class SyncMultiPolicyOrchestrator:
     # ========== Task End Detection ==========
 
     def _check_task_end(self, observation: dict, action: torch.Tensor):
-        """Check if the current task has ended (via RND + action variance)."""
-        if self._task_end_detector is None:
-            return
+        """Dual RND monitoring each control loop step.
 
-        import torch as th
+        Top camera  → gradient completion (task end, policy 1 only)
+        Aria camera → raw uncertainty (attention, always active)
 
-        # Extract image for RND
-        img_keys = [
-            k for k in observation if "image" in k and isinstance(observation[k], th.Tensor)
-        ]
-        if not img_keys:
-            return
+        Wrapped in try/except so RND errors never crash the control loop.
+        """
+        task_end_cfg = self.orch_config.task_end
+        action_b = action.unsqueeze(0) if action.dim() == 1 else action
 
-        obs_img = observation[img_keys[0]]
-        if obs_img.dim() == 3:
-            obs_img = obs_img.unsqueeze(0)
-        if action.dim() == 1:
-            action = action.unsqueeze(0)
+        # Helper: extract state tensor from observation
+        state_keys = [k for k in observation if "state" in k and isinstance(observation[k], torch.Tensor)]
+        obs_state = observation[state_keys[0]].unsqueeze(0) if state_keys else None
 
-        result = self._task_end_detector.update(obs_img, action)
+        # ---- TOP CAMERA: gradient completion (only during policy 1) ----
+        if self._completion_detector is not None and self._current_policy_idx == 0:
+            top_key = task_end_cfg.top_camera_key
+            if top_key in observation and isinstance(observation[top_key], torch.Tensor):
+                try:
+                    obs_img = observation[top_key]
+                    if obs_img.dim() == 3:
+                        obs_img = obs_img.unsqueeze(0)
 
-        # Publish via ROS2
-        if hasattr(self, "_task_end_pub"):
-            from std_msgs.msg import Float32MultiArray
+                    # Match state/action dims to what top RND expects
+                    _state = self._match_dims(obs_state, self._top_rnd.state_dim, obs_img.device)
+                    _action = self._match_dims(action_b, self._top_rnd.action_dim, obs_img.device)
 
-            msg = Float32MultiArray()
-            msg.data = [
-                float(result["task_end_detected"]),
-                result["uncertainty"],
-                result["action_variance"],
-                float(result["consecutive_frames"]),
-            ]
-            self._task_end_pub.publish(msg)
+                    is_complete, confidence = self._completion_detector.update(
+                        obs_img, _state, _action
+                    )
 
-        # Auto-switch on task end
-        if result["task_end_detected"] and not self._task_end_detected:
-            self._task_end_detected = True
-            logger.info(
-                f"🎯 TASK END DETECTED - uncertainty: {result['uncertainty']:.2f}, "
-                f"action_variance: {result['action_variance']:.4f}"
-            )
-            if self.orch_config.task_end.auto_switch_policy:
-                logger.info("Auto-switching to next policy")
-                self.handle_switch_policy()
-                if self._task_end_detector is not None:
-                    self._task_end_detector.reset()
-                self._task_end_detected = False
+                    # Publish diagnostics
+                    if hasattr(self, "_completion_pub"):
+                        from std_msgs.msg import Float32MultiArray
+                        status = self._completion_detector.get_status()
+                        msg = Float32MultiArray()
+                        msg.data = [
+                            float(is_complete),
+                            confidence,
+                            status["current_uncertainty"],
+                            status["smooth_gradient"],
+                        ]
+                        self._completion_pub.publish(msg)
+
+                    if is_complete and not self._task_end_detected:
+                        self._task_end_detected = True
+                        logger.info(
+                            f"🎯 TOP GRADIENT COMPLETION - confidence: {confidence:.2f}, "
+                            f"gradient: {self._completion_detector.get_status()['smooth_gradient']:.6f}"
+                        )
+                        self._handle_task_end_trigger()
+                        return
+                except Exception as e:
+                    logger.error(f"Top RND error (non-fatal): {e}", exc_info=False)
+
+        # ---- ARIA CAMERA: attention monitoring (always active) ----
+        if self._aria_rnd is not None:
+            aria_key = task_end_cfg.aria_camera_key
+            if aria_key in observation and isinstance(observation[aria_key], torch.Tensor):
+                try:
+                    obs_img = observation[aria_key]
+                    if obs_img.dim() == 3:
+                        obs_img = obs_img.unsqueeze(0)
+
+                    # Match state/action dims to what aria RND expects
+                    _state = self._match_dims(obs_state, self._aria_rnd.state_dim, obs_img.device)
+                    _action = self._match_dims(action_b, self._aria_rnd.action_dim, obs_img.device)
+
+                    step_unc, rolling_unc = self._aria_rnd.compute_uncertainty(
+                        obs_img, _state, _action, normalize=True,
+                    )
+
+                    # Publish diagnostics
+                    if hasattr(self, "_attention_pub"):
+                        from std_msgs.msg import Float32MultiArray
+                        msg = Float32MultiArray()
+                        msg.data = [step_unc, rolling_unc, float(self._aria_high_unc_count)]
+                        self._attention_pub.publish(msg)
+
+                    # Attention check: sustained high uncertainty → pause
+                    if rolling_unc > task_end_cfg.aria_uncertainty_threshold:
+                        self._aria_high_unc_count += 1
+                        if (
+                            self._aria_high_unc_count >= task_end_cfg.aria_sustained_frames
+                            and not self._aria_paused_by_attention
+                            and self.state == State.RUNNING
+                        ):
+                            self._aria_paused_by_attention = True
+                            logger.warning(
+                                f"⚠️  ATTENTION LOST - aria uncertainty {rolling_unc:.2f} > "
+                                f"{task_end_cfg.aria_uncertainty_threshold} for "
+                                f"{self._aria_high_unc_count} frames — auto-pausing"
+                            )
+                            self.handle_pause()
+                    else:
+                        self._aria_high_unc_count = 0
+                        # Auto-resume if we paused due to attention and it recovered
+                        if (
+                            self._aria_paused_by_attention
+                            and rolling_unc < task_end_cfg.aria_resume_threshold
+                            and self.state == State.PAUSED
+                        ):
+                            self._aria_paused_by_attention = False
+                            logger.info(
+                                f"✅ ATTENTION RECOVERED - aria uncertainty {rolling_unc:.2f} — "
+                                f"resetting policy and resuming"
+                            )
+                            self.active_policy.reset()  # flush stale action queue
+                            self.handle_resume()
+                except Exception as e:
+                    logger.error(f"Aria RND error (non-fatal): {e}", exc_info=False)
+
+    @staticmethod
+    def _match_dims(tensor, target_dim: int, device) -> torch.Tensor:
+        """Pad or truncate a [B, D] tensor to [B, target_dim].
+
+        Handles the case where the policy's observation state/action dim
+        doesn't match what the RND model was trained with.
+        """
+        if tensor is None:
+            return torch.zeros(1, target_dim, device=device)
+        if tensor.dim() == 1:
+            tensor = tensor.unsqueeze(0)
+        current_dim = tensor.shape[-1]
+        if current_dim == target_dim:
+            return tensor
+        elif current_dim < target_dim:
+            return torch.nn.functional.pad(tensor, (0, target_dim - current_dim))
+        else:
+            return tensor[..., :target_dim]
+
+    def _handle_task_end_trigger(self):
+        """Handle task end: auto-switch policy and reset completion detector."""
+        if self.orch_config.task_end.auto_switch_policy:
+            logger.info("Auto-switching to next policy")
+            self.handle_switch_policy()
+        # Reset completion detector (top camera) — it won't run during policy 2
+        if self._completion_detector is not None:
+            self._completion_detector.reset()
+        self._task_end_detected = False
 
     # ========== Recording ==========
 
@@ -1172,6 +1382,9 @@ class SyncMultiPolicyOrchestrator:
         logger.info("Control loop started")
         step = 0
         fps_window: list[float] = []
+        _consecutive_comm_errors = 0
+        _MAX_COMM_ERRORS = 3  # pause after this many consecutive failures
+        _MAX_RECOVERY_WAIT = 30.0  # seconds to wait before giving up
 
         while self._running:
             loop_start = time.perf_counter()
@@ -1204,9 +1417,43 @@ class SyncMultiPolicyOrchestrator:
                         self._check_task_end(observation, action)
 
                     step += 1
+                    _consecutive_comm_errors = 0  # reset on success
 
                 except Exception as e:
-                    logger.error(f"Control loop error: {e}", exc_info=True)
+                    _consecutive_comm_errors += 1
+                    is_comm_error = "sync read" in str(e).lower() or "status packet" in str(e).lower()
+
+                    if is_comm_error and _consecutive_comm_errors >= _MAX_COMM_ERRORS:
+                        logger.warning(
+                            f"⚠️  SERVO COMM LOST ({_consecutive_comm_errors} consecutive failures) — auto-pausing"
+                        )
+                        self._transition_to(State.PAUSED)
+
+                        # Wait for comms to recover
+                        t0 = time.time()
+                        recovered = False
+                        while time.time() - t0 < _MAX_RECOVERY_WAIT and self._running:
+                            time.sleep(0.5)
+                            try:
+                                self.robot.get_observation()
+                                recovered = True
+                                break
+                            except Exception:
+                                elapsed = time.time() - t0
+                                if int(elapsed) % 5 == 0:
+                                    logger.info(f"  Waiting for servo comms... ({elapsed:.0f}s)")
+
+                        if recovered:
+                            logger.info("✅ Servo comms recovered — resetting policy and resuming")
+                            self.active_policy.reset()  # flush stale action queue
+                            _consecutive_comm_errors = 0
+                            self._transition_to(State.RUNNING)
+                        else:
+                            logger.error(
+                                f"❌ Servo comms not recovered after {_MAX_RECOVERY_WAIT}s — staying paused"
+                            )
+                    elif not is_comm_error:
+                        logger.error(f"Control loop error: {e}", exc_info=True)
 
             # Check for reset trigger (from Aria eyes closed)
             if self._reset_triggered.is_set():
@@ -1292,9 +1539,13 @@ class SyncMultiPolicyOrchestrator:
             logger.info("Interrupted")
         finally:
             self._running = False
-            # 1. Stop rosbag recording
-            self._stop_rosbag()
-            self._upload_rosbag()
+            # 1. Stop rosbag recording (skip if handle_stop already handled it)
+            if self._rosbag_proc is not None:
+                if self._stop_service_called:
+                    self._stop_rosbag()
+                    self._upload_rosbag()
+                else:
+                    self._stop_and_delete_rosbag()
             # 2. Disconnect robot
             self.robot.disconnect()
             logger.info("Orchestrator stopped")

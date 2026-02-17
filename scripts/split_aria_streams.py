@@ -40,9 +40,10 @@ def split_aria_dataset(
     logger = logging.getLogger(__name__)
     
     logger.info(f"Loading source dataset: {source_repo_id}")
+    logger.info("  (Will auto-download from Hub if not found locally)")
     
-    # Load the original dataset
-    source_dataset = LeRobotDataset(repo_id=source_repo_id)
+    # Load the original dataset (auto-downloads from Hub if missing locally)
+    source_dataset = LeRobotDataset(repo_id=source_repo_id, force_cache_sync=False)
     
     logger.info(f"Source dataset has {source_dataset.meta.total_episodes} episodes")
     logger.info(f"Features: {list(source_dataset.meta.features.keys())}")

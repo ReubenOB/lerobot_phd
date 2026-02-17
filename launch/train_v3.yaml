@@ -44,7 +44,7 @@ dataset:
 
 policy:
   type: act
-  repo_id: "RAPOB/coffee_bimanual_aria_stage_2_all_gaussian_attention"
+  repo_id: "RAPOB/act_coffee_bimanual_aria_stage_1_hard_cutout_95"
   device: cuda
   private: true
 

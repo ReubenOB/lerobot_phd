@@ -271,6 +271,7 @@ class RNDModule(nn.Module):
         torch.save({
             'predictor_state_dict': self.predictor.state_dict(),
             'target_state_dict': self.target.state_dict(),
+            'resnet_model': self.resnet,
             'uncertainty_mean': self.uncertainty_mean,
             'uncertainty_std': self.uncertainty_std,
             'state_dim': self.state_dim,
@@ -278,6 +279,48 @@ class RNDModule(nn.Module):
             'image_size': self.image_size,
         }, path)
         print(f"[RND] Saved to {path}")
+
+    @classmethod
+    def load_from_checkpoint(cls, path: Path, device: str = "cuda") -> "RNDModule":
+        """Load a complete RNDModule from a checkpoint that contains the ResNet backbone.
+
+        This is the preferred way to load policy-specific RND models saved by train_rnd.py,
+        which stores the entire ResNet model object in the checkpoint.
+        """
+        path = Path(path)
+        checkpoint = torch.load(path, map_location=device, weights_only=False)
+
+        if 'resnet_model' not in checkpoint:
+            raise ValueError(
+                f"Checkpoint at {path} does not contain 'resnet_model'. "
+                "Use RNDModuleUniversal.load() for universal models."
+            )
+
+        resnet = checkpoint['resnet_model'].to(device)
+        module = cls(
+            resnet_backbone=resnet,
+            state_dim=checkpoint['state_dim'],
+            action_dim=checkpoint['action_dim'],
+            image_size=checkpoint['image_size'],
+            device=device,
+        )
+
+        module.predictor.load_state_dict(checkpoint['predictor_state_dict'])
+        module.target.load_state_dict(checkpoint['target_state_dict'])
+
+        unc_mean = checkpoint.get('uncertainty_mean', 0.0)
+        unc_std = checkpoint.get('uncertainty_std', 1.0)
+        if isinstance(unc_mean, torch.Tensor):
+            module.uncertainty_mean = unc_mean.to(device)
+        else:
+            module.uncertainty_mean = torch.tensor(unc_mean, device=device)
+        if isinstance(unc_std, torch.Tensor):
+            module.uncertainty_std = unc_std.to(device)
+        else:
+            module.uncertainty_std = torch.tensor(unc_std, device=device)
+
+        print(f"[RND] Loaded policy-specific model from {path}")
+        return module
 
     def load(self, path: Path):
         """Load RND module state."""

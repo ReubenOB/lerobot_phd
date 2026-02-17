@@ -221,9 +221,9 @@ class SO101Follower(Robot):
         try:
             if lock:
                 with lock:
-                    obs_dict = self.bus.sync_read("Present_Position")
+                    obs_dict = self.bus.sync_read("Present_Position", num_retry=2)
             else:
-                obs_dict = self.bus.sync_read("Present_Position")
+                obs_dict = self.bus.sync_read("Present_Position", num_retry=2)
         except Exception as e:
             logger.warning(f"Failed to read observation: {e}")
             if hasattr(self, '_last_observation'):
@@ -294,7 +294,7 @@ class SO101Follower(Robot):
         # Cap goal position when too far away from present position.
         # /!\ Slower fps expected due to reading from the follower.
         if self.config.max_relative_target is not None:
-            present_pos = self.bus.sync_read("Present_Position")
+            present_pos = self.bus.sync_read("Present_Position", num_retry=2)
             goal_present_pos = {key: (g_pos, present_pos[key]) for key, g_pos in goal_pos.items()}
             goal_pos = ensure_safe_goal_position(goal_present_pos, self.config.max_relative_target)
 
