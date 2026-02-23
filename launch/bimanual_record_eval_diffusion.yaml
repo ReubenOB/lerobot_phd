@@ -38,6 +38,12 @@ robot:
     #   width: 640
     #   height: 480
     #   fps: 30
+    aria_hard_cutout:
+      type: ros2
+      topic_name: /aria/eye_gaze/hard_cutout
+      width: 640
+      height: 480
+      fps: 30
 
 teleop:
   type: bi_so101_leader
@@ -56,6 +62,11 @@ dataset:
   reset_time_s: 10
   private: true
   push_to_hub: false
+
+policy:
+  type: diffusion
+  noise_scheduler_type: DDIM
+  num_inference_steps: 10
 
 display_data: false
 

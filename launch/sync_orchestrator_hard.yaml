@@ -52,9 +52,9 @@ robot:
       width: 640
       height: 480
       fps: 30
-    aria_gaussian_attention:
+    aria_hard_cutout:
       type: ros2
-      topic_name: /aria/eye_gaze/gaussian_attention
+      topic_name: /aria/eye_gaze/hard_cutout
       width: 640
       height: 480
       fps: 30
@@ -70,7 +70,7 @@ robot:
 policies:
   # Policy 1: Primary task
   - name: policy1
-    pretrained_path: "RAPOB/coffee_bimanual_aria_gausian_attention_all_v2_no_tf"
+    pretrained_path: "RAPOB/act_coffee_bimanual_aria_stage_1_hard_cutout_95"
     policy_type: "act"
     actions_per_chunk: 80
     device: cuda
@@ -80,7 +80,7 @@ policies:
   # Policy 2: Secondary task
   - name: policy2
     # pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_all_v2_gaussian_attention_75"
-    pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_gaussian_attention_blue_no_tf"
+    pretrained_path: "RAPOB/act_coffee_bimanual_aria_stage_2_hard_cutout_blue_b"
     policy_type: "act"
     actions_per_chunk: 80
     device: cuda
@@ -100,10 +100,10 @@ orchestrator:
   
   # Reset settings
   reset_playback_speed: 1.0
-  rewind_seconds: 5.0          # Rewind 5 seconds on reset (0 = full rewind)
+  rewind_seconds: 8.0          # Rewind 5 seconds on reset (0 = full rewind)
   
   # Use automatic mixed precision (faster inference on RTX 5080)
-  use_amp: false
+  use_amp: true
   
   # Task descriptions (for data recording)
   policy_1_task: "pick up the coffee pod"
@@ -172,13 +172,13 @@ orchestrator:
     compression_format: "zstd"                   # 'zstd', 'lz4', etc.
     # Upload completed bags to HuggingFace Hub
     upload_to_hub: true
-    repo_id: "RAPOB/sync_eval_rosbags_new_pc"
+    repo_id: "RAPOB/sync_eval_rosbags_hard_video_1"
     private: true
     # Topics to record (robot cameras + Aria gaze + joint states)
     topics:
       - /camera/top/image_raw
       - /camera/wrist_0/image_raw
       - /camera/wrist_1/image_raw
-      - /aria/eye_gaze/gaussian_attention
+      - /aria/eye_gaze/hard_cutout
       - /aria/eye_tracking/image_raw
       - /joint_states

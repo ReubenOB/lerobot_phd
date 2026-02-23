@@ -2,7 +2,7 @@
 # Use with: lerobot-train --config launch/train_v3.yaml --dataset.repo_id RAPOB/Bi-manual_act_v3
 
 dataset:
-  repo_id: "RAPOB/Bi-manual_act_v3_transform"
+  repo_id: "RAPOB/Bi-manual_diffusion_v3_transform"
   video_backend: pyav  # torchcodec crashes with std::bad_alloc on PyTorch 2.9+cu130
   image_transforms:
     enable: false
@@ -44,8 +44,8 @@ dataset:
           shear: [-2.0, 2.0]
 
 policy:
-  type: act
-  repo_id: "RAPOB/act_coffee_bimanual_aria_stage_2_hard_cutout_blue_b"
+  type: diffusion
+  repo_id: "RAPOB/act_coffee_bimanual_aria_hard_cutout_full"
   device: cuda
   private: true
 

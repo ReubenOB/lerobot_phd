@@ -23,9 +23,9 @@
     "wrist_flex": {
         "id": 4,
         "drive_mode": 0,
-        "homing_offset": 2027,
-        "range_min": 897,
-        "range_max": 3246
+        "homing_offset": 1600,
+        "range_min": 891,
+        "range_max": 3240
     },
     "wrist_roll": {
         "id": 5,

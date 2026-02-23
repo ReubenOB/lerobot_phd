@@ -1,0 +1,87 @@
+# DEP Level 2 -- ACT model training queue (NO ARIA variants)
+#
+# Trains ACT policies on the 6 no_aria DEP datasets.
+# Robot cameras only (top + wrist_0 + wrist_1), no aria gaze streams.
+# Each job trains for 100K steps, saves checkpoints every 10K.
+#
+# Usage:
+#   python scripts/queue_training.py --config launch/train_dep_queue.yaml
+#
+# Or train individual datasets manually:
+#   lerobot-train \
+#     --dataset.repo_id=RAPOB/dep_coffee_pod_gold_no_aria \
+#     --dataset.video_backend=pyav \
+#     --policy.type=act \
+#     --output_dir=outputs/train/dep_pod_gold_no_aria \
+#     --steps=100000 --save_freq=10000 --log_freq=200 \
+#     --wandb.enable=false --num_workers=0 --batch_size=8
+
+train_config: launch/train_v3.yaml
+work_dir: /home/acumino/vigil_ws
+
+jobs:
+  # ============================================================
+  # NO ARIA variants (robot cameras only -- for deployment)
+  # ============================================================
+
+  # # --- POD (Stage 1) ---
+  # - dataset: RAPOB/dep_coffee_pod_gold_no_aria
+  #   output: dep_pod_gold_no_aria_40ep
+  #   policy_repo: RAPOB/dep_act_pod_gold_no_aria_40ep
+
+  # - dataset: RAPOB/dep_coffee_pod_red_no_aria
+  #   output: dep_pod_red_no_aria_30ep
+  #   policy_repo: RAPOB/dep_act_pod_red_no_aria_30ep
+
+  # - dataset: RAPOB/dep_coffee_pod_green_no_aria
+  #   output: dep_pod_green_no_aria_25ep
+  #   policy_repo: RAPOB/dep_act_pod_green_no_aria_25ep
+
+  # # --- CUP (Stage 2) ---
+  # - dataset: RAPOB/dep_coffee_cup_blue_no_aria
+  #   output: dep_cup_blue_no_aria_30ep
+  #   policy_repo: RAPOB/dep_act_cup_blue_no_aria_30ep
+
+  # - dataset: RAPOB/dep_coffee_cup_red_no_aria
+  #   output: dep_cup_red_no_aria_20ep
+  #   policy_repo: RAPOB/dep_act_cup_red_no_aria_20ep
+
+  # - dataset: RAPOB/dep_coffee_cup_green_no_aria
+  #   output: dep_cup_green_no_aria_25ep
+  #   policy_repo: RAPOB/dep_act_cup_green_no_aria_25ep
+
+  # ============================================================
+  # Scene Classifiers (long run -- 50 epochs each)
+  # ============================================================
+
+  - output: dep_classifier_pod_50ep
+    command: >-
+      bash -c "source /opt/lerobot_venv/bin/activate &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      train --which pod --epochs 50 --batch-size 64 &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      upload --which pod"
+
+  - output: dep_classifier_cup_50ep
+    command: >-
+      bash -c "source /opt/lerobot_venv/bin/activate &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      train --which cup --epochs 50 --batch-size 64 &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      upload --which cup"
+
+  - output: dep_classifier_pod_20ep
+    command: >-
+      bash -c "source /opt/lerobot_venv/bin/activate &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      train --which pod --epochs 20 --batch-size 64 &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      upload --which pod"
+
+  - output: dep_classifier_cup_20ep
+    command: >-
+      bash -c "source /opt/lerobot_venv/bin/activate &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      train --which cup --epochs 20 --batch-size 64 &&
+      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+      upload --which cup"

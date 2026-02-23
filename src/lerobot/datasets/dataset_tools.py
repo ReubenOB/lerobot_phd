@@ -979,7 +979,13 @@ def _copy_data_with_feature_changes(
         file_name = relative_path.parts[2]
 
         chunk_idx = int(chunk_dir.split("-")[1])
-        file_idx = int(file_name.split("-")[1].split(".")[0])
+        # Handle both "file-000.parquet" and legacy "episode_000000.parquet" naming
+        if file_name.startswith("file-"):
+            file_idx = int(file_name.split("-")[1].split(".")[0])
+        elif file_name.startswith("episode_"):
+            file_idx = int(file_name.split("_")[1].split(".")[0])
+        else:
+            raise ValueError(f"Unknown parquet filename format: {file_name}")
 
         if remove_features:
             df = df.drop(columns=remove_features, errors="ignore")

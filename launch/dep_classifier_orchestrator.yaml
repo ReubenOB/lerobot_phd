@@ -1,0 +1,204 @@
+# DEP Classifier Orchestrator Configuration
+# ==========================================
+#
+# Decoupled Evaluation Pipeline — Level 3
+#
+# This orchestrator uses a trained scene classifier to dynamically select
+# specialist ACT models based on what the operator sees through the Aria glasses.
+#
+# How it works:
+#   1. Operator puts on Aria glasses, double-blinks to START
+#   2. Scene classifier runs on current aria_hard_cutout frame
+#   3. Classifier predicts: "pod_gold" → loads pod_gold specialist model
+#   4. Specialist model executes manipulation using hard_cutout + cameras
+#   5. On stage transition (manual switch or SARM), classifier runs again
+#   6. Classifier predicts: "cup_blue" → loads cup_blue specialist model
+#   7. Repeat until all stages complete
+#
+# The key insight: gaze determines WHICH model (via classifier), but the
+# manipulation policy uses gaze-processed views (hard_cutout) for motor control.
+# Start/stop/pause/reset still use blink gestures.
+#
+# Usage:
+#   python -m lerobot.async_inference.sync_orchestrator \
+#       --config_path=launch/dep_classifier_orchestrator.yaml
+#
+# Prerequisites:
+#   1. Build datasets:      python3 files/build_dep_datasets.py
+#   2. Train ACT models:    python scripts/queue_training.py --config launch/train_dep_queue.yaml
+#   3. Train classifier:    python3 files/train_scene_classifier.py
+#   4. Launch Aria:          ros2 run vigil_aria aria_streaming_node
+#   5. Launch eye gaze:      ros2 run vigil_aria eye_gaze_node
+#   6. Launch gestures:      ros2 run vigil_aria aria_gesture_node
+#   7. Launch cameras:       ros2 launch vigil_camera camera_publisher_config.launch.py
+
+# ============================================================================
+# Robot Configuration (BIMANUAL SO101)
+# ============================================================================
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    aria_hard_cutout:
+      type: ros2
+      topic_name: /aria/eye_gaze/hard_cutout
+      width: 640
+      height: 480
+      fps: 30
+
+# ============================================================================
+# Scene Classifier Configuration (NEW)
+# ============================================================================
+# Replaces static policy_servers / policies with dynamic selection
+# Two separate classifiers: one for pod color, one for cup color
+pod_classifier:
+  enabled: true
+  checkpoint_path: "/home/acumino/vigil_ws/outputs/scene_classifier/pod/best_model.pth"
+  camera_key: "observation.images.aria_hard_cutout"
+  device: cuda
+  min_confidence: 0.7
+  num_frames_to_average: 5
+  classification_timeout_s: 5.0
+  classes:
+    - gold
+    - red
+    - green
+  model_map:
+    gold:
+      pretrained_path: "RAPOB/dep_act_pod_gold_no_aria_40ep"
+      task: "Pick up the gold coffee pod"
+    red:
+      pretrained_path: "RAPOB/dep_act_pod_red_no_aria_30ep"
+      task: "Pick up the red coffee pod"
+    green:
+      pretrained_path: "RAPOB/dep_act_pod_green_no_aria_25ep"
+      task: "Pick up the green coffee pod"
+
+cup_classifier:
+  enabled: true
+  checkpoint_path: "/home/acumino/vigil_ws/outputs/scene_classifier/cup/best_model.pth"
+  camera_key: "observation.images.aria_hard_cutout"
+  device: cuda
+  min_confidence: 0.7
+  num_frames_to_average: 5
+  classification_timeout_s: 5.0
+  classes:
+    - blue
+    - red
+    - green
+  model_map:
+    blue:
+      pretrained_path: "RAPOB/dep_act_cup_blue_no_aria_30ep"
+      task: "Pick up the blue cup and make coffee"
+    red:
+      pretrained_path: "RAPOB/dep_act_cup_red_no_aria_20ep"
+      task: "Pick up the red cup and make coffee"
+    green:
+      pretrained_path: "RAPOB/dep_act_cup_green_no_aria_25ep"
+      task: "Pick up the green cup and make coffee"
+
+# ============================================================================
+# Fallback Static Policies (used if classifier is disabled)
+# ============================================================================
+# These provide a default if you want to test without the classifier
+policies:
+  - name: policy1
+    pretrained_path: "RAPOB/dep_act_pod_gold_no_aria_40ep"
+    policy_type: "act"
+    actions_per_chunk: 80
+    device: cuda
+    task: "pick up the coffee pod"
+
+  - name: policy2
+    pretrained_path: "RAPOB/dep_act_cup_blue_no_aria_30ep"
+    policy_type: "act"
+    actions_per_chunk: 80
+    device: cuda
+    task: "pick up the cup and make coffee"
+
+# ============================================================================
+# Control Loop
+# ============================================================================
+fps: 30
+buffer_max_frames: 3000
+
+# ============================================================================
+# Orchestrator Settings
+# ============================================================================
+orchestrator:
+  num_episodes: 1
+  max_episode_time_s: 300.0
+  transition_delay_s: 2.0
+  reset_playback_speed: 1.0
+  rewind_seconds: 8.0
+  use_amp: true
+
+  # Task descriptions
+  policy_1_task: "pick up the coffee pod (variant selected by classifier)"
+  policy_2_task: "pick up the cup and make coffee (variant selected by classifier)"
+
+  # === SARM (OPTIONAL — enable if you want auto-transition) ===
+  sarm:
+    enabled: false
+    progress_topic: "/sarm/progress"
+    stage_topic: "/sarm/stage"
+    stage_name_topic: "/sarm/stage_name"
+    policy_switch_threshold: 0.95
+
+  # === RND (OPTIONAL) ===
+  rnd:
+    enabled: false
+    pause_topic: "/robot/pause"
+    uncertainty_topic: "/uncertainty/rolling"
+
+  # === Aria Gesture Control ===
+  # Gestures control start/stop/pause/reset (UNCHANGED from existing backbone)
+  # What the operator LOOKS AT is handled by the scene classifier (DECOUPLED)
+  aria:
+    enabled: true
+    gaze_topic: "/aria/gaze_gesture/detected"
+    eyes_closed_topic: "/aria/blink/eyes_closed_detected"
+    double_blink_topic: "/aria/blink/double_detected"
+
+  # === Task End Detection (OPTIONAL) ===
+  task_end:
+    enabled: false
+
+  # === Rosbag Recording ===
+  rosbag:
+    enabled: true
+    output_dir: "/home/acumino/Projects/PHD/vigil_ws/outputs/rosbags"
+    storage: "mcap"
+    compression: false
+    upload_to_hub: true
+    repo_id: "RAPOB/dep_eval_rosbags"
+    private: true
+    topics:
+      - /camera/top/image_raw
+      - /camera/wrist_0/image_raw
+      - /camera/wrist_1/image_raw
+      - /aria/eye_gaze/hard_cutout
+      - /aria/eye_tracking/image_raw
+      - /joint_states

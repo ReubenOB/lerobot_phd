@@ -55,6 +55,7 @@ dataset:
   episode_time_s: 200
   reset_time_s: 20
   private: true
+  push_to_hub: false
 
 display_data: false
 

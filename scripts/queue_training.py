@@ -58,12 +58,14 @@ class TrainingJob:
         policy_repo: Optional[str] = None,
         train_config: str = "launch/train_v3.yaml",
         extra_args: Optional[Dict[str, str]] = None,
+        command: Optional[List[str]] = None,
     ):
         self.dataset = dataset
         self.output = output
         self.policy_repo = policy_repo
         self.train_config = train_config
         self.extra_args = extra_args or {}
+        self.command = command  # If set, overrides the auto-generated lerobot-train command
         self.start_time = None
         self.end_time = None
         self.return_code = None
@@ -132,7 +134,11 @@ class TrainingQueue:
         return logger
     
     def _build_train_command(self, job: TrainingJob) -> List[str]:
-        """Build the lerobot-train command for a job."""
+        """Build the command for a job."""
+        # If an explicit command is specified, use it directly
+        if job.command:
+            return job.command
+
         cmd = [
             "lerobot-train",
             f"--config={job.train_config}",
@@ -320,12 +326,16 @@ def load_queue_from_yaml(config_path: Path) -> TrainingQueue:
     
     jobs = []
     for job_config in config["jobs"]:
+        # Support raw command override (e.g. for classifier training scripts)
+        raw_command = job_config.get("command")
+        command_list = raw_command.split() if isinstance(raw_command, str) else raw_command
         job = TrainingJob(
-            dataset=job_config["dataset"],
+            dataset=job_config.get("dataset", ""),
             output=job_config["output"],
             policy_repo=job_config.get("policy_repo"),
             train_config=job_config.get("train_config", train_config),
             extra_args=job_config.get("extra_args", {}),
+            command=command_list,
         )
         jobs.append(job)
     

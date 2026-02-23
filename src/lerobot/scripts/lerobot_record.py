@@ -60,6 +60,7 @@ lerobot-record \
 
 import logging
 import time
+import dataclasses
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from pprint import pformat
@@ -176,6 +177,27 @@ class DatasetRecordConfig:
             raise ValueError("You need to provide a task as argument in `single_task`.")
 
 
+def _extract_config_overrides(config) -> list[str]:
+    """Extract fields from a parsed config that differ from class defaults, as CLI-style args.
+
+    This is used to forward YAML-specified policy overrides when loading a pretrained model,
+    since from_pretrained replaces the YAML-parsed config with the saved config.json.
+    Only simple scalar types (str, int, float, bool) are forwarded to avoid complex serialization issues.
+    """
+    overrides = []
+    for f in dataclasses.fields(config):
+        val = getattr(config, f.name)
+        if f.default is not dataclasses.MISSING:
+            default = f.default
+        elif f.default_factory is not dataclasses.MISSING:
+            default = f.default_factory()
+        else:
+            continue
+        if val != default and isinstance(val, (str, int, float, bool)):
+            overrides.append(f"--{f.name}={val}")
+    return overrides
+
+
 @dataclass
 class RecordConfig:
     robot: RobotConfig
@@ -195,8 +217,17 @@ class RecordConfig:
         # HACK: We parse again the cli args here to get the pretrained path if there was one.
         policy_path = parser.get_path_arg("policy")
         if policy_path:
-            cli_overrides = parser.get_cli_overrides("policy")
-            self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=cli_overrides)
+            cli_overrides = parser.get_cli_overrides("policy") or []
+
+            # When loading a pretrained policy, from_pretrained replaces
+            # the YAML-parsed config entirely with the saved config.json.
+            # Extract non-default fields from the YAML-parsed config and
+            # forward them as overrides so YAML settings take effect.
+            config_overrides = _extract_config_overrides(self.policy) if self.policy else []
+            # Config-file overrides first, then CLI (last-wins, so CLI takes priority)
+            all_overrides = config_overrides + cli_overrides
+
+            self.policy = PreTrainedConfig.from_pretrained(policy_path, cli_overrides=all_overrides)
             self.policy.pretrained_path = policy_path
 
         if self.teleop is None and self.policy is None:

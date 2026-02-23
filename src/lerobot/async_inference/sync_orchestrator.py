@@ -103,6 +103,8 @@ class PolicySpec:
     task: str = "pick up the object"
     # Keep on GPU when not active? (uses more VRAM but switching is instant)
     keep_on_gpu: bool = False
+    # Override saved config fields at load time (e.g. noise_scheduler_type, num_inference_steps)
+    config_overrides: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -183,7 +185,7 @@ class RosbagConfig:
     """
 
     enabled: bool = False
-    output_dir: str = "/home/rapob/vigil_ws/outputs/rosbags"
+    output_dir: str = "/home/acumino/vigil_ws/outputs/rosbags"
     # HuggingFace upload
     upload_to_hub: bool = False
     repo_id: str = ""
@@ -199,6 +201,10 @@ class RosbagConfig:
     ])
     # Storage type: 'sqlite3' (default) or 'mcap'
     storage: str = "mcap"
+    # Compression settings
+    compression: bool = True
+    compression_mode: str = "file"       # 'file' or 'message'
+    compression_format: str = "zstd"     # 'zstd', 'lz4', or other supported formats
 
 
 @dataclass
@@ -252,6 +258,7 @@ class SyncMultiPolicyConfig:
                 device=ps.get("device", "cuda"),
                 task=ps.get("task", "pick up the object"),
                 keep_on_gpu=ps.get("keep_on_gpu", False),
+                config_overrides=ps.get("config_overrides", {}),
             )
             for i, ps in enumerate(self.policies)
         ]
@@ -476,9 +483,16 @@ class SyncMultiPolicyOrchestrator:
         # Get the correct policy class (ACTPolicy, DiffusionPolicy, etc.)
         policy_class = get_policy_class(spec.policy_type)
 
+        # Build cli_overrides from config_overrides dict so they take effect
+        # even when loading from a pretrained checkpoint whose config.json
+        # would otherwise override any runtime settings (e.g. DDIM, num_inference_steps).
+        cli_overrides = []
+        for k, v in spec.config_overrides.items():
+            cli_overrides.extend([f"--{k}", str(v)])
+
         # Load pretrained model directly - config already has features
         # Load on CPU first to avoid loading all models onto GPU
-        policy = policy_class.from_pretrained(spec.pretrained_path)
+        policy = policy_class.from_pretrained(spec.pretrained_path, cli_overrides=cli_overrides)
         policy.to("cpu")
         policy.eval()
 
@@ -575,13 +589,20 @@ class SyncMultiPolicyOrchestrator:
             "ros2", "bag", "record",
             "--output", str(self._rosbag_path),
             "--storage", cfg.storage,
-            "--compression-mode", "file",
-            "--compression-format", "zstd",
         ]
+        # Add compression if enabled
+        if cfg.compression:
+            cmd.extend(["--compression-mode", cfg.compression_mode])
+            cmd.extend(["--compression-format", cfg.compression_format])
         # Add all topics
         cmd.extend(cfg.topics)
 
         logger.info(f"Starting rosbag: {bag_name}")
+        logger.info(f"  Storage: {cfg.storage}")
+        if cfg.compression:
+            logger.info(f"  Compression: {cfg.compression_format} ({cfg.compression_mode})")
+        else:
+            logger.info(f"  Compression: disabled")
         logger.info(f"  Topics: {cfg.topics}")
 
         try:
@@ -608,7 +629,8 @@ class SyncMultiPolicyOrchestrator:
             self._rosbag_proc = None
             return
 
-        logger.info("Stopping rosbag recording (waiting for zstd compression)...")
+        comp_msg = f" (waiting for {self._rosbag_cfg.compression_format} compression)" if self._rosbag_cfg.compression else ""
+        logger.info(f"Stopping rosbag recording{comp_msg}...")
         try:
             # SIGINT for graceful shutdown
             self._rosbag_proc.send_signal(signal.SIGINT)
@@ -620,7 +642,8 @@ class SyncMultiPolicyOrchestrator:
                     break  # Exited cleanly
                 except subprocess.TimeoutExpired:
                     if i > 0 and i % 5 == 0:
-                        logger.info(f"  Still flushing compressed rosbag... ({i}s)")
+                        comp_note = "compressed " if self._rosbag_cfg.compression else ""
+                        logger.info(f"  Still flushing {comp_note}rosbag... ({i}s)")
             else:
                 # 60s elapsed — force kill
                 logger.warning("Rosbag didn't stop after 60s, killing")

@@ -1,0 +1,29 @@
+# Training queue for no-top-camera datasets
+#
+# Strips all 3 datasets have had observation.images.top removed.
+# Cameras remaining: wrist_0, wrist_1, aria_hard_cutout
+#
+# NOTE: stage_1 (95 episodes) runs separately with a single lerobot-train call.
+# This queue runs the remaining 2 datasets sequentially on the same GPU.
+#
+# Run from inside container:
+#   source /opt/lerobot_venv/bin/activate
+#   cd /home/acumino/vigil_ws/src/deps/lerobot_phd
+#   python scripts/queue_training.py --config launch/train_no_top_queue.yaml
+#
+# The single v3 training for stage_1 runs in parallel:
+#   lerobot-train --config launch/train_v3.yaml \
+#     --dataset.repo_id RAPOB/coffee_bimanual_aria_stage_1_hard_cutout_95_no_top \
+#     --policy.repo_id RAPOB/act_coffee_bimanual_aria_stage_1_hard_cutout_95_no_top \
+#     --output_dir outputs/train/stage1_no_top
+
+train_config: launch/train_v3.yaml
+
+jobs:
+  - dataset: RAPOB/coffee_bimanual_aria_stage_1_hard_cutout_95
+    output: stage_1_diffusion
+    policy_repo: RAPOB/diffusion_coffee_bimanual_aria_stage_1_hard_cutout_95
+
+  - dataset: RAPOB/coffee_bimanual_aria_stage_2_hard_cutout_v2
+    output: stage2_v2_diffuion
+    policy_repo: RAPOB/diffusion_coffee_bimanual_aria_stage_2_hard_cutout_v2

@@ -1,7 +1,7 @@
 # Bimanual SO-101 Policy Evaluation Config
 # Usage:
 #   1. Launch cameras: ros2 launch vigil_camera camera_publisher_config.launch.py config:=$(ros2 pkg prefix vigil_camera)/share/vigil_camera/config/bimanual_camera_publisher.yaml
-#   2. Evaluate: lerobot-record --config_path=launch/bimanual_record_eval.yaml --policy.path="RAPOB/bimanual_policy" --dataset.repo_id="RAPOB/bimanual_eval"
+#   2. Evaluate: lerobot-record --config_path=launch/bimanual_record_eval_hard.yaml --policy.path="RAPOB/bimanual_policy" --dataset.repo_id="RAPOB/bimanual_eval"
 
 robot:
   type: bi_so101_follower
@@ -55,6 +55,7 @@ dataset:
   episode_time_s: 200
   reset_time_s: 20
   private: true
+  push_to_hub: false
 
 display_data: false
 

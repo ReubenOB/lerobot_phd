@@ -1,0 +1,18 @@
+train_config: launch/train_v3.yaml
+
+jobs:
+  - dataset: RAPOB/dep_coffee_pod_red_no_aria
+    output: dep_pod_red_no_aria_30ep
+    policy_repo: RAPOB/dep_act_pod_red_no_aria_30ep
+
+  - dataset: RAPOB/dep_coffee_pod_green_no_aria
+    output: dep_pod_green_no_aria_25ep
+    policy_repo: RAPOB/dep_act_pod_green_no_aria_25ep
+
+  - dataset: RAPOB/dep_coffee_cup_blue_no_aria
+    output: dep_cup_blue_no_aria_30ep
+    policy_repo: RAPOB/dep_act_cup_blue_no_aria_30ep
+
+  - dataset: RAPOB/dep_coffee_cup_green_no_aria
+    output: dep_cup_green_no_aria_25ep
+    policy_repo: RAPOB/dep_act_cup_green_no_aria_25ep

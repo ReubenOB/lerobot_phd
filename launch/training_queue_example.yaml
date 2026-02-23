@@ -5,10 +5,10 @@
 train_config: launch/train_v3.yaml
 
 # Optional: specify work directory (default: current directory)
-# work_dir: /home/rapob/vigil_ws/src/deps/lerobot_phd
+# work_dir: /home/acumino/vigil_ws/src/deps/lerobot_phd
 
 # Optional: specify log directory (default: work_dir/logs/queue)
-# log_dir: /home/rapob/vigil_ws/src/deps/lerobot_phd/logs/training_queue
+# log_dir: /home/acumino/vigil_ws/src/deps/lerobot_phd/logs/training_queue
 
 # List of training jobs to run sequentially
 jobs:
