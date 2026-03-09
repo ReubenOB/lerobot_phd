@@ -111,7 +111,7 @@ def load_policy_backbone(policy_path: str | Path, dataset_repo_id: str, device: 
     # This is needed because make_policy expects dataset metadata
     # Use the explicitly provided dataset_repo_id to ensure dimensions match
     logger.info(f"Loading dataset metadata from {dataset_repo_id}")
-    temp_dataset = LeRobotDataset(dataset_repo_id)
+    temp_dataset = LeRobotDataset(dataset_repo_id, video_backend="pyav")
 
     # Load the full policy using make_policy (same as record.py)
     policy = make_policy(policy_config, ds_meta=temp_dataset.meta)
@@ -242,6 +242,7 @@ def train_rnd(
             repo_id=repo_id,
             image_transforms=image_transforms,
             episodes=ep,
+            video_backend="pyav",
         )
         all_datasets.append(ds)
         total_episodes += ds.num_episodes

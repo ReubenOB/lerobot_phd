@@ -1,0 +1,178 @@
+# DEP Orchestrator — Mode 3: Monolithic (No Classifier)
+# ======================================================
+#
+# Two fixed policies (one for POD stage, one for CUP stage) run
+# sequentially without any classifier. This is the existing behavior
+# adapted for the DEP task: operator gestures switch between policies.
+#
+# Flow:
+#   1. IDLE → operator looks RIGHT → policy 1 (POD) starts
+#   2. SARM/manual switch → policy 2 (CUP) starts
+#   3. Eyes closed → reset/rewind as normal
+#
+# No classifier, no variant selection — just two fixed pretrained models.
+#
+# Control (all modes):
+#   ros2 service call /orchestrator/start std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/pause std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/resume std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/reset std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/stop std_srvs/srv/Trigger
+#   ros2 service call /orchestrator/switch_policy std_srvs/srv/Trigger
+#
+# Usage:
+#   python -m lerobot.async_inference.sync_orchestrator \
+#       --config_path=launch/dep_monolithic.yaml
+
+# ============================================================================
+# Robot Configuration (BIMANUAL SO101)
+# ============================================================================
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    aria_hard_cutout:
+      type: ros2
+      topic_name: /aria/eye_gaze/hard_cutout
+      width: 640
+      height: 480
+      fps: 30
+
+# ============================================================================
+# Selection Mode
+# ============================================================================
+selection_mode: monolithic
+
+# ============================================================================
+# Policies (loaded at startup — no classifier needed)
+# ============================================================================
+policies:
+  - name: dep_pod
+    pretrained_path: "RAPOB/dep_act_pod_gold_no_aria_40ep"
+    policy_type: "act"
+    actions_per_chunk: 80
+    device: cuda
+    task: "Pick up the coffee pod"
+
+  - name: dep_cup
+    pretrained_path: "RAPOB/dep_act_cup_blue_no_aria_30ep"
+    policy_type: "act"
+    actions_per_chunk: 80
+    device: cuda
+    task: "Pick up the cup and make coffee"
+
+# ============================================================================
+# Control Loop
+# ============================================================================
+fps: 30
+buffer_max_frames: 3000
+
+# ============================================================================
+# Orchestrator Settings
+# ============================================================================
+orchestrator:
+  num_episodes: 1
+  max_episode_time_s: 300.0
+  transition_delay_s: 2.0
+  reset_playback_speed: 1.0
+  rewind_seconds: 8.0
+  use_amp: true
+
+  policy_1_task: "Pick up the coffee pod"
+  policy_2_task: "Pick up the cup and make coffee"
+
+  sarm:
+    enabled: false
+    progress_topic: "/sarm/progress"
+    stage_topic: "/sarm/stage"
+    stage_name_topic: "/sarm/stage_name"
+    policy_switch_threshold: 0.95
+
+  rnd:
+    enabled: false
+    pause_topic: "/robot/pause"
+    uncertainty_topic: "/uncertainty/rolling"
+
+  aria:
+    enabled: true
+    gaze_topic: "/aria/gaze_gesture/detected"
+    eyes_closed_topic: "/aria/blink/eyes_closed_detected"
+    double_blink_topic: "/aria/blink/double_detected"
+
+  # === Task End Detection + Attention Monitoring (OPTIONAL) ===
+  # Two RND models serve DIFFERENT purposes:
+  #   - Top camera:  gradient completion → RNDCompletionDetector (pod policy only)
+  #     Monitors uncertainty gradient; flatline = task done → auto switch_policy
+  #   - Aria camera: raw uncertainty → attention monitoring (always active)
+  #     High uncertainty = operator not paying attention → auto-pause
+  #     Drops back below threshold → auto-resume
+  #
+  # You need to train RND models first:
+  #   # Aria (attention) — train on aria_hard_cutout camera:
+  #   python -m lerobot.scripts.train_rnd \
+  #       --policy-path RAPOB/dep_act_pod_gold_no_aria_40ep \
+  #       --dataset-repo-id RAPOB/dep_coffee_pod_gold_no_aria \
+  #       --camera-key observation.images.aria_hard_cutout \
+  #       --output-dir outputs/rnd_dep/aria_attention \
+  #       --num-epochs 200 --batch-size 32 --num-workers 0
+  #
+  #   # Top camera (completion) — train on top camera:
+  #   python -m lerobot.scripts.train_rnd \
+  #       --policy-path RAPOB/dep_act_pod_gold_no_aria_40ep \
+  #       --dataset-repo-id RAPOB/dep_coffee_pod_gold_no_aria \
+  #       --camera-key observation.images.top \
+  #       --output-dir outputs/rnd_dep/top_completion \
+  #       --num-epochs 200 --batch-size 32 --num-workers 0
+  task_end:
+    enabled: false  # Set to true once RND models are trained
+    top_rnd_model_path: "/home/acumino/vigil_ws/outputs/rnd_dep/top_completion"
+    aria_rnd_model_path: "/home/acumino/vigil_ws/outputs/rnd_dep/aria_attention"
+    top_camera_key: "observation.images.top"
+    aria_camera_key: "observation.images.aria_hard_cutout"
+    # Top: gradient completion (task end → auto switch policy)
+    gradient_window: 30       # ~1s at 30fps
+    stability_window: 45      # ~1.5s sustained low-gradient
+    min_frames: 150           # ~5s minimum before detection
+    auto_switch_policy: true
+    # Aria: attention monitoring (raw uncertainty → pause/resume)
+    aria_uncertainty_threshold: 2.0    # normalized; above this → pause
+    aria_sustained_frames: 15          # consecutive high-unc frames before pause
+    aria_resume_threshold: 1.0         # below this → auto-resume
+
+  rosbag:
+    enabled: true
+    output_dir: "/home/acumino/vigil_ws/outputs/rosbags"
+    storage: "mcap"
+    compression: false
+    upload_to_hub: true
+    repo_id: "RAPOB/dep_eval_rosbags"
+    private: true
+    topics:
+      - /camera/top/image_raw
+      - /camera/wrist_0/image_raw
+      - /camera/wrist_1/image_raw
+      - /aria/eye_gaze/hard_cutout
+      - /aria/eye_tracking/image_raw
+      - /joint_states

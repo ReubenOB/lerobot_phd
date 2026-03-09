@@ -150,13 +150,10 @@ def prepare_raw_observation(
     # -> {observation.state:[value1,value2,...], observation.images.laptop:np.ndarray}
     lerobot_obs = make_lerobot_observation(robot_obs, lerobot_features)
 
-    # 2. Greps all observation.images.<> keys
-    image_keys = list(filter(is_image_key, lerobot_obs))
+    # 2. Greps all observation.images.<> keys that the policy expects
+    image_keys = [k for k in filter(is_image_key, lerobot_obs) if k in policy_image_features]
     # state's shape is expected as (B, state_dim)
     state_dict = {OBS_STATE: extract_state_from_raw_observation(lerobot_obs)}
-    image_dict = {
-        image_k: extract_images_from_raw_observation(lerobot_obs, image_k) for image_k in image_keys
-    }
 
     # Turns the image features to (C, H, W) with H, W matching the policy image features.
     # This reduces the resolution of the images

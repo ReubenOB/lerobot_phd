@@ -30,10 +30,24 @@ Control via ROS2 services:
     ros2 service call /orchestrator/switch_policy std_srvs/srv/Trigger
 """
 
+import collections
+import json
 import logging
 import subprocess
 import threading
 import time
+import warnings
+
+import numpy as np
+
+# torchvision video I/O is deprecated in favour of TorchCodec, but TorchCodec
+# crashes on this system (std::bad_alloc). Suppress the noisy warning.
+warnings.filterwarnings(
+    "ignore",
+    message="The video decoding and encoding capabilities of torchvision are deprecated",
+    category=UserWarning,
+    module="torchvision",
+)
 from contextlib import nullcontext
 from copy import copy
 from dataclasses import asdict, dataclass, field
@@ -47,7 +61,10 @@ import torch
 
 # Import camera configs to register them with draccus
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.ros2.configuration_ros2 import ROS2CameraConfig  # noqa: F401
+try:
+    from lerobot.cameras.ros2.configuration_ros2 import ROS2CameraConfig  # noqa: F401
+except ImportError:
+    pass  # ROS2 not available (e.g. running outside container without cv_bridge)
 from lerobot.policies.factory import make_pre_post_processors
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import PolicyProcessorPipeline
@@ -59,6 +76,20 @@ from .helpers import (
     raw_observation_to_observation,
 )
 from .movement_buffer import MovementBuffer
+from .policy_selector import (
+    ClassifierResult,
+    EpisodeReplayer,
+    MonolithicConfig,
+    MonolithicSelector,
+    PolicySelectorBase,
+    SceneClassifier,
+    SelectedPolicy,
+    SingleEpisodeConfig,
+    SingleEpisodeSelector,
+    Stage,
+    TrainedModelConfig,
+    TrainedModelSelector,
+)
 
 # Try to import ROS2
 try:
@@ -231,14 +262,69 @@ class OrchestratorConfig:
 
 
 @dataclass
+class ClassifierConfig:
+    """Scene classifier settings for DEP two-stage selection."""
+
+    enabled: bool = False
+    pod_checkpoint: str = "/home/acumino/vigil_ws/outputs/scene_classifier/pod/best_model.pth"
+    cup_checkpoint: str = "/home/acumino/vigil_ws/outputs/scene_classifier/cup/best_model.pth"
+    pod_classes: list = field(default_factory=lambda: ["gold", "red", "green"])
+    cup_classes: list = field(default_factory=lambda: ["blue", "red", "green"])
+    camera_key: str = "observation.images.aria_hard_cutout"
+    device: str = "cuda"
+    min_confidence: float = 0.7
+    num_frames_to_average: int = 5
+    classification_timeout_s: float = 5.0
+
+
+@dataclass
 class SyncMultiPolicyConfig:
     """Complete configuration for synchronous multi-policy orchestrator."""
 
     # Robot
     robot: RobotConfig = field(default_factory=lambda: BiSO101FollowerConfig())
 
-    # Policies (loaded locally, no gRPC)
+    # Policies (loaded locally, no gRPC) — used by monolithic mode
     policies: list = field(default_factory=list)
+
+    # Selection mode: "monolithic" | "trained_model" | "single_episode"
+    selection_mode: str = "monolithic"
+
+    # Classifier settings (used by trained_model and single_episode modes)
+    classifier: ClassifierConfig = field(default_factory=ClassifierConfig)
+
+    # Model maps for trained_model mode (variant → pretrained_path + task)
+    pod_models: dict = field(default_factory=lambda: {
+        "gold":  {"pretrained_path": "RAPOB/dep_act_pod_gold_no_aria_40ep",
+                   "task": "Pick up the gold coffee pod"},
+        "red":   {"pretrained_path": "RAPOB/dep_act_pod_red_no_aria_30ep",
+                   "task": "Pick up the red coffee pod"},
+        "green": {"pretrained_path": "RAPOB/dep_act_pod_green_no_aria_25ep",
+                   "task": "Pick up the green coffee pod"},
+    })
+    cup_models: dict = field(default_factory=lambda: {
+        "blue":  {"pretrained_path": "RAPOB/dep_act_cup_blue_no_aria_30ep",
+                   "task": "Pick up the blue cup and make coffee"},
+        "red":   {"pretrained_path": "RAPOB/dep_act_cup_red_no_aria_20ep",
+                   "task": "Pick up the red cup and make coffee"},
+        "green": {"pretrained_path": "RAPOB/dep_act_cup_green_no_aria_25ep",
+                   "task": "Pick up the green cup and make coffee"},
+    })
+
+    # Dataset maps for single_episode mode (variant → dataset repo_id)
+    pod_datasets: dict = field(default_factory=lambda: {
+        "gold":  "RAPOB/dep_coffee_pod_gold_no_aria",
+        "red":   "RAPOB/dep_coffee_pod_red_no_aria",
+        "green": "RAPOB/dep_coffee_pod_green_no_aria",
+    })
+    cup_datasets: dict = field(default_factory=lambda: {
+        "blue":  "RAPOB/dep_coffee_cup_blue_no_aria",
+        "red":   "RAPOB/dep_coffee_cup_red_no_aria",
+        "green": "RAPOB/dep_coffee_cup_green_no_aria",
+    })
+    pod_episode_indices: dict = field(default_factory=lambda: {})  # variant → episode index
+    cup_episode_indices: dict = field(default_factory=lambda: {})  # variant → episode index
+    default_episode_index: int = 0  # fallback if variant not in above dicts
 
     # Control loop
     fps: float = 30.0
@@ -411,26 +497,58 @@ class SyncMultiPolicyOrchestrator:
         # LeRobot feature mapping (needed for observation conversion)
         self.lerobot_features = map_robot_keys_to_lerobot_features(self.robot)
 
-        # Load all policies
+        # Load all policies (monolithic mode loads from config.policies;
+        # classifier modes start empty and load on-demand)
         self.loaded_policies: list[LoadedPolicy] = []
-        self._load_all_policies()
+        self._selection_mode = config.selection_mode
+        self._policy_selector: PolicySelectorBase | None = None
+        self._pod_classifier: SceneClassifier | None = None
+        self._cup_classifier: SceneClassifier | None = None
+        self._current_stage: Stage = Stage.POD
+        self._episode_replayer: EpisodeReplayer | None = None
+
+        # Rolling frame buffer for pre-gesture classification.
+        # Stores (capture_time, frame_bgr) for the last FRAME_BUFFER_SECS seconds.
+        self._FRAME_BUFFER_SECS = 8.0   # keep frames for 8s
+        self._GAZE_HOLD_SECS    = 1.5   # how long the user must hold gaze to trigger
+        self._CLASSIFY_WARMUP_SECS = 5.0  # wait this long for frames before classifying
+        self._frame_buffer: collections.deque = collections.deque()
+        self._frame_buffer_lock = threading.Lock()
+
+        # Classifier predictions from external dep_classifier_node
+        # (subscribes to /dep/classifier/status JSON topic)
+        self._pod_pred_history: list[tuple[float, str, float]] = []  # (time, class, conf)
+        self._cup_pred_history: list[tuple[float, str, float]] = []
+        self._classifier_pred_lock = threading.Lock()
+
+        self._init_policy_selector()
+
+        # For monolithic mode, load policies from config at startup
+        if self._selection_mode == "monolithic":
+            self._load_all_policies()
 
         # Rosbag recording (optional)
         self._rosbag_cfg = self.orch_config.rosbag
         self._rosbag_proc: subprocess.Popen | None = None
         self._rosbag_path: Path | None = None
         self._stop_service_called = False  # Only save rosbag if /stop is called
+        self._episode_succeeded = False  # Set True when COMPLETE is reached
 
         # Setup task end detector if configured
         if self.orch_config.task_end.enabled:
             self._init_task_end_detector()
+
+        # External classifier node provides predictions via /dep/classifier/status
+        if self._selection_mode in ("trained_model", "single_episode") and self.config.classifier.enabled:
+            logger.info("Using external dep_classifier_node (subscribing to /dep/classifier/status)")
 
         # Setup ROS2 if available
         if ros_node is not None and ROS2_AVAILABLE:
             self._setup_ros2(ros_node)
 
         logger.info("SyncMultiPolicyOrchestrator initialized")
-        logger.info(f"  Policies: {[p.name for p in self.loaded_policies]}")
+        logger.info(f"  Selection: {self._selection_mode}")
+        logger.info(f"  Policies: {[p.name for p in self.loaded_policies] or '(loaded on-demand)'}")
         logger.info(
             f"  SARM: {'enabled' if self.orch_config.sarm.enabled else 'disabled'}"
         )
@@ -447,6 +565,340 @@ class SyncMultiPolicyOrchestrator:
             f"  Rosbag: {'enabled' if self._rosbag_cfg.enabled else 'disabled'}"
             + (f" → {self._rosbag_cfg.output_dir}" if self._rosbag_cfg.enabled else "")
         )
+
+    # ========== Policy Selection ==========
+
+    def _init_policy_selector(self):
+        """Initialize the policy selector strategy and classifiers."""
+        mode = self._selection_mode
+        logger.info(f"Selection mode: {mode}")
+
+        if mode == "monolithic":
+            cfg = MonolithicConfig()
+            # Monolithic uses the first two entries from config.policies
+            specs = self.config.get_policy_specs()
+            if len(specs) >= 1:
+                cfg.pod_pretrained_path = specs[0].pretrained_path
+                cfg.pod_task = specs[0].task
+            if len(specs) >= 2:
+                cfg.cup_pretrained_path = specs[1].pretrained_path
+                cfg.cup_task = specs[1].task
+            self._policy_selector = MonolithicSelector(cfg)
+
+        elif mode == "trained_model":
+            tm_cfg = TrainedModelConfig(
+                pod_models=self.config.pod_models,
+                cup_models=self.config.cup_models,
+            )
+            self._policy_selector = TrainedModelSelector(tm_cfg)
+
+        elif mode == "single_episode":
+            se_cfg = SingleEpisodeConfig(
+                pod_datasets=self.config.pod_datasets,
+                cup_datasets=self.config.cup_datasets,
+                pod_episode_indices=self.config.pod_episode_indices,
+                cup_episode_indices=self.config.cup_episode_indices,
+                default_episode_index=self.config.default_episode_index,
+            )
+            self._policy_selector = SingleEpisodeSelector(se_cfg)
+
+        else:
+            raise ValueError(f"Unknown selection_mode: {mode!r}")
+
+        logger.info(f"Policy selector: {self._policy_selector.get_name()}")
+
+    def _init_classifiers(self):
+        """Load pod and cup scene classifiers."""
+        cc = self.config.classifier
+        if not cc.enabled:
+            logger.warning(
+                "Classifier not enabled but selection_mode requires it. "
+                "Enable classifier in config."
+            )
+            return
+
+        try:
+            self._pod_classifier = SceneClassifier(
+                checkpoint_path=cc.pod_checkpoint,
+                classes=cc.pod_classes,
+                device=cc.device,
+                min_confidence=cc.min_confidence,
+                num_frames_to_average=cc.num_frames_to_average,
+            )
+            self._cup_classifier = SceneClassifier(
+                checkpoint_path=cc.cup_checkpoint,
+                classes=cc.cup_classes,
+                device=cc.device,
+                min_confidence=cc.min_confidence,
+                num_frames_to_average=cc.num_frames_to_average,
+            )
+            logger.info("Scene classifiers loaded (pod + cup)")
+        except Exception as e:
+            logger.error(f"Failed to load classifiers: {e}")
+
+    def _start_frame_capture_thread(self):
+        """Deprecated — frame capture is now done via ROS2 subscription."""
+        logger.warning("_start_frame_capture_thread called but is no longer used")
+
+    def _frame_capture_loop(self):
+        """Deprecated — frame capture is now done via ROS2 subscription."""
+        pass
+
+    def _classifier_img_cb(self, msg: "RosImage"):
+        """ROS2 callback: cache incoming classifier camera frames into the rolling buffer.
+
+        Converts sensor_msgs/Image → BGR uint8 numpy array WITHOUT touching the
+        robot serial port (avoids contention with the main control loop).
+        """
+        try:
+            import numpy as np_local
+            enc = msg.encoding.lower()
+            arr = np_local.frombuffer(msg.data, dtype=np_local.uint8).reshape(
+                msg.height, msg.width, -1
+            )
+            if enc in ("rgb8", "rgb"):
+                frame = arr[:, :, ::-1].copy()  # RGB → BGR
+            elif enc in ("bgr8", "bgr"):
+                frame = arr
+            elif enc in ("mono8",):
+                frame = np_local.stack([arr[:, :, 0]] * 3, axis=-1)
+            else:
+                # Unknown encoding — try to use as-is
+                frame = arr if arr.shape[2] == 3 else arr[:, :, :3]
+
+            now = time.time()
+            cutoff = now - self._FRAME_BUFFER_SECS
+            with self._frame_buffer_lock:
+                self._frame_buffer.append((now, frame))
+                while self._frame_buffer and self._frame_buffer[0][0] < cutoff:
+                    self._frame_buffer.popleft()
+                buf_len = len(self._frame_buffer)
+
+            if buf_len == 1:
+                logger.info(f"Classifier frame buffer: FIRST frame received (shape={frame.shape}, enc={enc})")
+        except Exception as e:
+            logger.warning(f"_classifier_img_cb: failed to process image: {e}")
+
+    def _dep_classifier_status_cb(self, msg: "String"):
+        """Callback for /dep/classifier/status JSON topic (from dep_classifier_node).
+
+        Stores pod and cup predictions with timestamps for majority voting.
+        """
+        try:
+            data = json.loads(msg.data)
+            now = time.time()
+            pod = data.get("pod", {})
+            cup = data.get("cup", {})
+            with self._classifier_pred_lock:
+                n_pod = len(self._pod_pred_history)
+                if pod.get("prediction") and pod["prediction"] not in ("unknown", "unavailable", "error"):
+                    self._pod_pred_history.append(
+                        (now, pod["prediction"], pod.get("confidence", 0.0))
+                    )
+                if cup.get("prediction") and cup["prediction"] not in ("unknown", "unavailable", "error"):
+                    self._cup_pred_history.append(
+                        (now, cup["prediction"], cup.get("confidence", 0.0))
+                    )
+                # Trim to last 30s to avoid unbounded growth
+                cutoff = now - 30.0
+                self._pod_pred_history = [
+                    x for x in self._pod_pred_history if x[0] >= cutoff
+                ]
+                self._cup_pred_history = [
+                    x for x in self._cup_pred_history if x[0] >= cutoff
+                ]
+                if n_pod == 0 and len(self._pod_pred_history) > 0:
+                    logger.info(f"First classifier prediction received: pod={pod}, cup={cup}")
+        except Exception as e:
+            logger.warning(f"Classifier status parse error: {e}")
+
+    @staticmethod
+    def _extract_frame_from_obs(raw_obs: dict, camera_key_short: str) -> np.ndarray | None:
+        """Pull the BGR uint8 frame for *camera_key_short* out of a raw observation dict."""
+        for key in raw_obs:
+            if camera_key_short in key:
+                val = raw_obs[key]
+                if isinstance(val, np.ndarray):
+                    return val
+                elif isinstance(val, torch.Tensor):
+                    frame = val.cpu().numpy()
+                    if frame.ndim == 3 and frame.shape[0] in (1, 3):
+                        frame = frame.transpose(1, 2, 0)
+                    if frame.dtype != np.uint8:
+                        frame = (frame * 255).clip(0, 255).astype(np.uint8)
+                    return frame
+        return None
+
+    def _get_classifier_frame(self, before_time: float | None = None) -> tuple[np.ndarray, Stage] | None:
+        """Return a classifier frame from the rolling buffer.
+
+        Falls back to the robot's ROS2 bridge camera cache when the rolling
+        buffer is empty (safe — no serial-port access).
+
+        Args:
+            before_time: if given, return the most recent buffered frame whose
+                capture time is <= before_time (i.e. a frame taken *before* the
+                gaze gesture was detected).  If None, return the latest frame.
+        """
+        with self._frame_buffer_lock:
+            buf_empty = not self._frame_buffer
+            if not buf_empty:
+                if before_time is not None:
+                    # Walk newest→oldest, pick first frame before the cutoff
+                    for ts, frame in reversed(self._frame_buffer):
+                        if ts <= before_time:
+                            return frame, self._current_stage
+                    # All buffered frames are newer than before_time — use oldest available
+                    logger.debug(
+                        f"No pre-gesture frames before t={before_time:.2f}, "
+                        f"using oldest buffered frame (t={self._frame_buffer[0][0]:.2f})"
+                    )
+                    return self._frame_buffer[0][1], self._current_stage
+                else:
+                    return self._frame_buffer[-1][1], self._current_stage
+
+        # Buffer is empty — try the robot's ROS2 bridge camera cache
+        # (this reads from a dict — no serial port access)
+        cam_key = self.config.classifier.camera_key.replace(
+            "observation.images.", ""
+        )
+        bridge = getattr(self.robot, "ros2_bridge", None)
+        if bridge is not None:
+            frame = bridge.get_camera_frame(cam_key)
+            if frame is not None:
+                logger.info(
+                    f"_get_classifier_frame: got frame from robot bridge "
+                    f"(shape={frame.shape})"
+                )
+                return frame, self._current_stage
+
+        logger.warning(
+            f"_get_classifier_frame: no frames available — "
+            f"is the classifier camera topic publishing? "
+            f"(expected topic for '{cam_key}')"
+        )
+        return None
+
+    def classify_and_select(self, stage: Stage, before_time: float | None = None) -> SelectedPolicy | None:
+        """Run the classifier for the given stage, then select a policy.
+
+        Args:
+            before_time: if set, only use buffered frames captured before this
+                timestamp (see _get_classifier_frame).
+
+        Returns None if classification fails.
+        """
+        classifier = (
+            self._pod_classifier if stage == Stage.POD
+            else self._cup_classifier
+        )
+
+        if classifier is None:
+            logger.error(f"No classifier for stage {stage.value}")
+            return None
+
+        self._current_stage = stage
+        cc = self.config.classifier
+
+        frame_source = (lambda: self._get_classifier_frame(before_time=before_time))
+
+        # Quick sanity-check: can we get a frame right now?
+        test_frame = frame_source()
+        if test_frame is None:
+            logger.warning(
+                f"classify_and_select: frame_source() returned None immediately "
+                f"(before_time={before_time}, buffer has {len(self._frame_buffer)} frames) — "
+                "classification will likely time out"
+            )
+        else:
+            logger.info(f"classify_and_select: got test frame shape={test_frame[0].shape}")
+
+        result = classifier.classify_until_confident(
+            frame_source=frame_source,
+            timeout_s=cc.classification_timeout_s,
+        )
+
+        if result is None:
+            # Timed out — take the best guess from the most recent buffered frame
+            classifier.reset()
+            logger.warning(f"Classification timed out for {stage.value}, using best guess")
+            frame_result = self._get_classifier_frame(before_time=before_time)
+            if frame_result:
+                frame, _ = frame_result
+                class_name, conf, probs = classifier.classify_frame(frame)
+                result = ClassifierResult(
+                    stage=stage,
+                    predicted_class=class_name,
+                    confidence=conf,
+                    raw_probs=probs,
+                )
+            else:
+                return None
+
+        return self._policy_selector.select_policy(stage, result)
+
+    def load_selected_policy(self, selection: SelectedPolicy) -> bool:
+        """Load or prepare the policy chosen by the selector.
+
+        For trained_model: loads the ACT checkpoint and puts it on GPU.
+        For single_episode: loads the dataset episode into EpisodeReplayer.
+        For monolithic: the policies are already loaded at startup.
+
+        Returns True on success.
+        """
+        mode = self._selection_mode
+
+        if mode == "single_episode":
+            logger.info(
+                f"load_selected_policy | dataset={selection.dataset_repo_id} "
+                f"episode={selection.episode_index}"
+            )
+            try:
+                self._episode_replayer = EpisodeReplayer(
+                    dataset_repo_id=selection.dataset_repo_id,
+                    episode_index=selection.episode_index,
+                )
+                self._episode_replayer.load()
+                logger.info(f"Episode loaded: {self._episode_replayer.num_frames} frames")
+                return True
+            except Exception as e:
+                import traceback
+                logger.error(f"Failed to load episode: {e}\n{traceback.format_exc()}")
+                return False
+
+        elif mode == "trained_model":
+            # Unload current policy, load the selected one
+            if self.loaded_policies:
+                self.loaded_policies[0].to_cpu()
+                self.loaded_policies.clear()
+
+            spec = PolicySpec(
+                name=f"{selection.stage.value}_{selection.variant}",
+                pretrained_path=selection.pretrained_path,
+                task=selection.task,
+            )
+            try:
+                loaded = self._load_single_policy(spec)
+                loaded.to_gpu()
+                self.loaded_policies = [loaded]
+                self._current_policy_idx = 0
+                logger.info(
+                    f"Loaded {spec.name} "
+                    f"({sum(p.numel() for p in loaded.policy.parameters()) / 1e6:.1f}M params)"
+                )
+                return True
+            except Exception as e:
+                logger.error(f"Failed to load policy {spec.pretrained_path}: {e}")
+                return False
+
+        elif mode == "monolithic":
+            # Policies already loaded, just switch to correct index
+            idx = 0 if selection.stage == Stage.POD else 1
+            if idx < len(self.loaded_policies):
+                self.handle_switch_policy(policy_idx=idx)
+            return True
+
+        return False
 
     # ========== Policy Loading ==========
 
@@ -715,7 +1167,9 @@ class SyncMultiPolicyOrchestrator:
         return self._running
 
     @property
-    def active_policy(self) -> LoadedPolicy:
+    def active_policy(self) -> LoadedPolicy | None:
+        if not self.loaded_policies:
+            return None
         return self.loaded_policies[self._current_policy_idx]
 
     # ========== State Machine ==========
@@ -752,12 +1206,15 @@ class SyncMultiPolicyOrchestrator:
         elif new_state == State.COMPLETE:
             if self.buffer.is_recording:
                 self.buffer.stop_recording()
-            # Only save rosbag if /stop service was explicitly called
-            if self._stop_service_called:
-                self._stop_rosbag()
-                self._upload_rosbag()
-            elif self._rosbag_proc is not None:
-                self._stop_and_delete_rosbag()
+            # COMPLETE is a successful finish — always save & upload rosbag
+            self._episode_succeeded = True
+            if self._rosbag_proc is not None:
+                import threading as _th
+                _th.Thread(
+                    target=self._stop_and_upload_rosbag,
+                    name="rosbag_complete",
+                    daemon=True,
+                ).start()
 
     # ========== ROS2 Setup ==========
 
@@ -847,6 +1304,26 @@ class SyncMultiPolicyOrchestrator:
                 f"Aria subscriptions: {self.orch_config.aria.gaze_topic}"
             )
 
+        # Classifier topic subscription (external dep_classifier_node)
+        if (self._selection_mode in ("trained_model", "single_episode")
+                and self.config.classifier.enabled):
+            node.create_subscription(
+                String,
+                "/dep/classifier/status",
+                self._dep_classifier_status_cb,
+                10,
+            )
+            logger.info("Classifier subscription: /dep/classifier/status")
+            topic_info = node.get_publishers_info_by_topic("/dep/classifier/status")
+            if not topic_info:
+                logger.warning(
+                    "⚠️  No publishers on /dep/classifier/status! "
+                    "Is dep_classifier_node running? "
+                    "Classification will fail until this topic is published."
+                )
+            else:
+                logger.info(f"  /dep/classifier/status has {len(topic_info)} publisher(s) — OK")
+
         # Task end publishers (optional - dual RND models)
         if self.orch_config.task_end.enabled:
             from std_msgs.msg import Float32MultiArray
@@ -919,12 +1396,17 @@ class SyncMultiPolicyOrchestrator:
             return
 
         stats = self.buffer.get_stats()
+        policy_name = self.active_policy.name if self.active_policy else "none"
+        replayer_info = ""
+        if self._episode_replayer is not None:
+            replayer_info = f" | replay: {self._episode_replayer.progress:.0%}"
         msg = String()
         msg.data = (
             f"{self.state.value} | "
-            f"policy: {self.active_policy.name} | "
-            f"buffer: {stats['buffer_size']} | "
-            f"sarm: {self._sarm_progress:.2f}"
+            f"stage: {self._current_stage.value} | "
+            f"mode: {self._selection_mode} | "
+            f"policy: {policy_name}{replayer_info} | "
+            f"buffer: {stats['buffer_size']}"
         )
         self._state_pub.publish(msg)
 
@@ -933,11 +1415,13 @@ class SyncMultiPolicyOrchestrator:
     def handle_start(self) -> tuple[bool, str]:
         """Start or resume execution."""
         if self.state == State.IDLE:
-            self.active_policy.reset()
+            if self.active_policy is not None:
+                self.active_policy.reset()
             self._episode_start_time = time.time()
             self._recording_frame_count = 0
             self._transition_to(State.RUNNING)
-            return True, f"Started with policy '{self.active_policy.name}'"
+            policy_name = self.active_policy.name if self.active_policy else "episode_replay"
+            return True, f"Started with policy '{policy_name}'"
         elif self.state == State.PAUSED:
             return self.handle_resume()
         return False, f"Cannot start from {self.state.value}"
@@ -1212,8 +1696,14 @@ class SyncMultiPolicyOrchestrator:
 
         LEFT  → Pause (if running)
         RIGHT → Start (if idle) / Resume (if paused)
+
+        In classifier modes (trained_model / single_episode):
+          RIGHT + IDLE → wait for frames → classify → load → start
+          RIGHT + PAUSED → resume
         """
-        direction = msg.data.lower()
+        raw_val = msg.data
+        direction = raw_val.lower().strip()
+        logger.info(f"👁️ GAZE MSG received: repr={repr(raw_val)} → direction='{direction}' | state={self.state}")
         if direction == "left":
             if self.state == State.RUNNING:
                 logger.info("👁️ LEFT GAZE - Pausing")
@@ -1221,13 +1711,135 @@ class SyncMultiPolicyOrchestrator:
         elif direction == "right":
             if self.state == State.IDLE:
                 logger.info("👁️ RIGHT GAZE - Starting")
-                self.handle_start()
+                if self._selection_mode in ("trained_model", "single_episode"):
+                    t = threading.Thread(
+                        target=self._classify_and_start,
+                        daemon=True,
+                    )
+                    t.start()
+                elif self._selection_mode == "monolithic":
+                    # Switch to correct pre-loaded policy for current stage then start
+                    stage = self._current_stage
+                    idx = 0 if stage == Stage.POD else 1
+                    policy_name = self.loaded_policies[idx].name if idx < len(self.loaded_policies) else None
+                    logger.info(f"👁️ RIGHT GAZE - Monolithic stage={stage.value}, using policy {idx} ({policy_name})")
+                    selection = self._policy_selector.select_policy(stage)
+                    if self.load_selected_policy(selection):
+                        self.handle_start()
+                    else:
+                        logger.error("Failed to switch policy for monolithic start")
+                else:
+                    self.handle_start()
             elif self.state == State.PAUSED:
                 logger.info("👁️ RIGHT GAZE - Resuming")
                 self.handle_resume()
 
+    def _classify_and_start(self):
+        """Wait for classifier predictions from dep_classifier_node, then start.
+
+        Clears stale predictions, waits _CLASSIFY_WARMUP_SECS for fresh
+        predictions to accumulate on /dep/classifier/status, then picks
+        the most confident class via majority vote.
+        """
+        stage = self._current_stage
+        warmup = self._CLASSIFY_WARMUP_SECS
+
+        logger.info(
+            f"🔍 _classify_and_start | stage={stage.value} | "
+            f"waiting {warmup}s for classifier predictions..."
+        )
+
+        # Clear old predictions so we only use fresh ones
+        with self._classifier_pred_lock:
+            if stage == Stage.POD:
+                self._pod_pred_history.clear()
+            else:
+                self._cup_pred_history.clear()
+
+        # Wait for predictions to accumulate
+        t_start = time.time()
+        time.sleep(warmup)
+
+        # Collect predictions received during the warmup window
+        with self._classifier_pred_lock:
+            history = (self._pod_pred_history if stage == Stage.POD
+                       else self._cup_pred_history)
+            recent = [(t, cls, conf) for t, cls, conf in history if t >= t_start]
+
+        if not recent:
+            logger.error(
+                f"No classifier predictions received during {warmup}s — "
+                f"is dep_classifier_node running? Staying IDLE."
+            )
+            return
+
+        # Majority vote weighted by confidence
+        vote_counts: dict[str, int] = {}
+        conf_sums: dict[str, float] = {}
+        for _, cls, conf in recent:
+            vote_counts[cls] = vote_counts.get(cls, 0) + 1
+            conf_sums[cls] = conf_sums.get(cls, 0.0) + conf
+
+        best_class = max(conf_sums, key=conf_sums.get)
+        avg_conf = conf_sums[best_class] / vote_counts[best_class]
+
+        logger.info(
+            f"🎯 Classification: {best_class} "
+            f"(conf={avg_conf:.2f}, votes={vote_counts[best_class]}/{len(recent)})"
+        )
+
+        # Build ClassifierResult for the policy selector
+        total_conf = sum(conf_sums.values())
+        probs = {cls: conf_sums[cls] / total_conf for cls in conf_sums} if total_conf > 0 else {}
+        result = ClassifierResult(
+            stage=stage,
+            predicted_class=best_class,
+            confidence=avg_conf,
+            raw_probs=probs,
+        )
+
+        selection = self._policy_selector.select_policy(stage, result)
+        if selection is None:
+            logger.error("Policy selection failed — staying IDLE")
+            return
+
+        logger.info(
+            f"Selected: {selection.variant} ({selection.source}) "
+            f"for {stage.value}"
+        )
+
+        if not self.load_selected_policy(selection):
+            logger.error("Failed to load selected policy — staying IDLE")
+            return
+
+        self.handle_start()
+
     def _aria_eyes_closed_cb(self, msg: "Bool"):
-        if msg.data and self.state in [State.RUNNING, State.PAUSED]:
+        """Eyes closed → advance stage / complete.
+
+        In classifier modes:
+          POD stage → pause, advance to CUP, wait 5s, classify CUP, start
+          CUP stage → COMPLETE
+        In monolithic mode:
+          RUNNING/PAUSED → rewind as before
+        """
+        if not msg.data:
+            return
+        if self.state not in [State.RUNNING, State.PAUSED]:
+            return
+
+        if self._selection_mode in ("trained_model", "single_episode", "monolithic"):
+            if self._current_stage == Stage.POD:
+                logger.info("👁️ EYES CLOSED - Pod stage done, advancing to CUP")
+                logger.info("   Look RIGHT at the cup to start CUP stage")
+                # Stop current execution, go IDLE, wait for RIGHT gaze
+                self._transition_to(State.IDLE)
+                self._episode_replayer = None
+                self._current_stage = Stage.CUP
+            else:
+                logger.info("👁️ EYES CLOSED - Cup stage done, task complete")
+                self._transition_to(State.COMPLETE)
+        else:
             logger.info("👁️ EYES CLOSED - Resetting")
             self._reset_triggered.set()
 
@@ -1415,29 +2027,55 @@ class SyncMultiPolicyOrchestrator:
             # Only run inference when in RUNNING state
             if self.state == State.RUNNING:
                 try:
-                    # 1. OBSERVE - capture from robot hardware
-                    raw_obs = self.robot.get_observation()
-                    observation = self._prepare_observation(raw_obs)
+                    if self._selection_mode == "single_episode" and self._episode_replayer is not None:
+                        # ── Single Episode: open-loop replay ──
+                        action_dict = self._episode_replayer.next_action()
+                        if action_dict is None:
+                            logger.info(
+                                f"Episode replay complete "
+                                f"({self._episode_replayer.num_frames} frames)"
+                            )
+                            self._transition_to(State.PAUSED)
+                            continue
 
-                    # 2. INFER - direct policy call, zero latency
-                    action = self.active_policy.select_action(
-                        observation, use_amp=self.orch_config.use_amp
-                    )
+                        performed = self.robot.send_action(action_dict)
 
-                    # 3. ACT - send to robot
-                    action_dict = self._action_to_dict(action)
-                    performed = self.robot.send_action(action_dict)
+                        if self.buffer.is_recording:
+                            record = performed if performed else action_dict
+                            self.buffer.record_frame(record)
 
-                    # 4. RECORD to buffer for rewind
-                    if self.buffer.is_recording:
-                        record = performed if performed else action_dict
-                        self.buffer.record_frame(record)
+                        if step % 300 == 0:
+                            logger.info(
+                                f"Replay progress: "
+                                f"{self._episode_replayer.progress:.0%} "
+                                f"({self._episode_replayer._cursor}/"
+                                f"{self._episode_replayer.num_frames})"
+                            )
+                    else:
+                        # ── Trained Model / Monolithic: closed-loop inference ──
+                        # 1. OBSERVE - capture from robot hardware
+                        raw_obs = self.robot.get_observation()
+                        observation = self._prepare_observation(raw_obs)
 
-                    # 5. (rosbag records topics automatically via subprocess)
+                        # 2. INFER - direct policy call, zero latency
+                        action = self.active_policy.select_action(
+                            observation, use_amp=self.orch_config.use_amp
+                        )
 
-                    # 6. CHECK task end (optional)
-                    if self.orch_config.task_end.enabled:
-                        self._check_task_end(observation, action)
+                        # 3. ACT - send to robot
+                        action_dict = self._action_to_dict(action)
+                        performed = self.robot.send_action(action_dict)
+
+                        # 4. RECORD to buffer for rewind
+                        if self.buffer.is_recording:
+                            record = performed if performed else action_dict
+                            self.buffer.record_frame(record)
+
+                        # 5. (rosbag records topics automatically via subprocess)
+
+                        # 6. CHECK task end (optional)
+                        if self.orch_config.task_end.enabled:
+                            self._check_task_end(observation, action)
 
                     step += 1
                     _consecutive_comm_errors = 0  # reset on success
@@ -1505,10 +2143,11 @@ class SyncMultiPolicyOrchestrator:
                 fps_window.pop(0)
             if step > 0 and step % 300 == 0:
                 avg_fps = sum(fps_window) / len(fps_window)
+                policy_name = self.active_policy.name if self.active_policy else "episode_replay"
                 logger.info(
                     f"Step {step} | FPS: {avg_fps:.1f} | "
                     f"Buffer: {self.buffer.get_stats()['buffer_size']} | "
-                    f"Policy: {self.active_policy.name}"
+                    f"Policy: {policy_name}"
                 )
 
         logger.info(f"Control loop stopped after {step} steps")
@@ -1527,6 +2166,10 @@ class SyncMultiPolicyOrchestrator:
         """Run the synchronous orchestrator."""
         self._running = True
 
+        # Treat SIGTERM (pkill) the same as Ctrl+C so the finally cleanup runs
+        import signal as _signal
+        _signal.signal(_signal.SIGTERM, lambda *_: (_ for _ in ()).throw(KeyboardInterrupt()))
+
         logger.info("=" * 60)
         logger.info("SYNC MULTI-POLICY ORCHESTRATOR")
         logger.info("=" * 60)
@@ -1536,7 +2179,9 @@ class SyncMultiPolicyOrchestrator:
         logger.info(
             f"Policies: {[p.name for p in self.loaded_policies]}"
         )
-        logger.info(f"Active: {self.active_policy.name}")
+        active_name = self.active_policy.name if self.active_policy else "(awaiting classification)"
+        logger.info(f"Selection: {self._selection_mode} | Stage: {self._current_stage.value}")
+        logger.info(f"Active: {active_name}")
         logger.info(f"FPS: {self.config.fps}")
         logger.info(
             f"SARM: {'enabled' if self.orch_config.sarm.enabled else 'disabled'}"
@@ -1562,9 +2207,9 @@ class SyncMultiPolicyOrchestrator:
             logger.info("Interrupted")
         finally:
             self._running = False
-            # 1. Stop rosbag recording (skip if handle_stop already handled it)
+            # 1. Stop rosbag recording (skip if handle_stop/COMPLETE already handled it)
             if self._rosbag_proc is not None:
-                if self._stop_service_called:
+                if self._stop_service_called or self._episode_succeeded:
                     self._stop_rosbag()
                     self._upload_rosbag()
                 else:
@@ -1612,6 +2257,7 @@ def run_sync_orchestrator(cfg: SyncMultiPolicyConfig):
         level=logging.INFO,
         format="%(asctime)s | %(name)s | %(levelname)s | %(message)s",
         datefmt="%H:%M:%S",
+        force=True,  # override any existing logging config
     )
     logger.info(pformat(asdict(cfg)))
 

@@ -1,0 +1,139 @@
+# DEP Orchestrator — Mode 1: Single Episode Replay
+# =================================================
+#
+# Classifier picks the object variant → replays episode 0 from that
+# variant's dataset as an open-loop trajectory. No trained policy needed.
+#
+# Flow:
+#   1. IDLE → operator looks RIGHT → classifier runs on aria_hard_cutout
+#   2. Classifier identifies pod color (gold/red/green)
+#   3. Episode 0 from that pod's dataset is replayed open-loop
+#   4. Eyes closed → advance to CUP stage → IDLE
+#   5. Operator looks RIGHT → classifier identifies cup color (blue/red/green)
+#   6. Episode 0 from that cup's dataset is replayed open-loop
+#   7. Eyes closed → COMPLETE
+#
+# Usage:
+#   python -m lerobot.async_inference.sync_orchestrator \
+#       --config_path=launch/dep_single_episode.yaml
+
+# ============================================================================
+# Robot Configuration (BIMANUAL SO101)
+# ============================================================================
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    aria_hard_cutout:
+      type: ros2
+      topic_name: /aria/eye_gaze/hard_cutout
+      width: 640
+      height: 480
+      fps: 30
+
+# ============================================================================
+# Selection Mode
+# ============================================================================
+selection_mode: single_episode
+
+# ============================================================================
+# Classifier
+# ============================================================================
+classifier:
+  enabled: true
+  pod_checkpoint: "/home/acumino/vigil_ws/outputs/scene_classifier/pod/best_model.pth"
+  cup_checkpoint: "/home/acumino/vigil_ws/outputs/scene_classifier/cup/best_model.pth"
+  pod_classes: [gold, red, green]
+  cup_classes: [blue, red, green]
+  camera_key: "observation.images.aria_hard_cutout"
+  device: cuda
+  min_confidence: 0.7
+  num_frames_to_average: 5
+  classification_timeout_s: 10.0
+
+# ============================================================================
+# Dataset Maps (variant → dataset repo_id)
+# ============================================================================
+pod_datasets:
+  gold:  RAPOB/dep_coffee_pod_gold_no_aria
+  red:   RAPOB/dep_coffee_pod_red_no_aria
+  green: RAPOB/dep_coffee_pod_green_no_aria
+
+cup_datasets:
+  blue:  RAPOB/dep_coffee_cup_blue_no_aria
+  red:   RAPOB/dep_coffee_cup_red_no_aria
+  green: RAPOB/dep_coffee_cup_green_no_aria
+
+# Per-variant episode indices (which episode to replay for each color)
+pod_episode_indices:
+  gold: 10
+  red: 1
+  green: 1
+cup_episode_indices:
+  blue: 1
+  red: 0
+  green: 1
+
+# No trained policies needed for single_episode mode
+policies: []
+
+# ============================================================================
+# Control Loop
+# ============================================================================
+fps: 30
+buffer_max_frames: 3000
+
+# ============================================================================
+# Orchestrator Settings
+# ============================================================================
+orchestrator:
+  num_episodes: 1
+  max_episode_time_s: 300.0
+  transition_delay_s: 2.0
+  reset_playback_speed: 1.0
+  rewind_seconds: 8.0
+  use_amp: false
+
+  aria:
+    enabled: true
+    gaze_topic: "/aria/gaze_gesture/detected"
+    eyes_closed_topic: "/aria/blink/eyes_closed_detected"
+    double_blink_topic: "/aria/blink/double_detected"
+
+  rosbag:
+    enabled: true
+    output_dir: "/home/acumino/vigil_ws/outputs/rosbags"
+    storage: "mcap"
+    compression: false
+    upload_to_hub: false
+    repo_id: "RAPOB/single_episode_rosbag_paper_1"
+    private: true
+    topics:
+      - /camera/top/image_raw
+      - /camera/wrist_0/image_raw
+      - /camera/wrist_1/image_raw
+      - /aria/eye_gaze/hard_cutout
+      - /aria/eye_tracking/image_raw
+      - /joint_states

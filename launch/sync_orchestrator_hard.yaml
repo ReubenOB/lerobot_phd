@@ -72,7 +72,7 @@ policies:
   - name: policy1
     pretrained_path: "RAPOB/act_coffee_bimanual_aria_stage_1_hard_cutout_95"
     policy_type: "act"
-    actions_per_chunk: 80
+    actions_per_chunk: 100
     device: cuda
     task: "pick up the first object"
     # keep_on_gpu: false  # Set true if you have enough VRAM for both models (~2x memory)
@@ -80,9 +80,9 @@ policies:
   # Policy 2: Secondary task
   - name: policy2
     # pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_all_v2_gaussian_attention_75"
-    pretrained_path: "RAPOB/act_coffee_bimanual_aria_stage_2_hard_cutout_blue_b"
+    pretrained_path: "RAPOB/coffee_bimanual_aria_stage_2_all_v2_hard_cutout_75"
     policy_type: "act"
-    actions_per_chunk: 80
+    actions_per_chunk: 100
     device: cuda
     task: "pick up the second object"
     # keep_on_gpu: false
@@ -93,7 +93,7 @@ buffer_max_frames: 3000
 
 # Orchestrator settings
 orchestrator:
-  # Episode settings
+  # Episode settingss
   num_episodes: 1
   max_episode_time_s: 300.0
   transition_delay_s: 2.0
@@ -164,15 +164,15 @@ orchestrator:
   # Bags saved to output_dir with auto-generated timestamped names.
   rosbag:
     enabled: true
-    output_dir: "/home/acumino/Projects/PHD/vigil_ws/outputs/rosbags"
+    output_dir: "/home/acumino/vigil_ws/outputs/rosbags"
     storage: "mcap"                              # mcap or sqlite3
     # Compression settings
     compression: false                            # Enable/disable compression
     compression_mode: "file"                     # 'file' or 'message'
     compression_format: "zstd"                   # 'zstd', 'lz4', etc.
     # Upload completed bags to HuggingFace Hub
-    upload_to_hub: true
-    repo_id: "RAPOB/sync_eval_rosbags_hard_video_1"
+    upload_to_hub: false
+    repo_id: "RAPOB/sync_eval_rosbags_hard_video_3"
     private: true
     # Topics to record (robot cameras + Aria gaze + joint states)
     topics:

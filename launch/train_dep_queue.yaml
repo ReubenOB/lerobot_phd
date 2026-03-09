@@ -16,7 +16,7 @@
 #     --steps=100000 --save_freq=10000 --log_freq=200 \
 #     --wandb.enable=false --num_workers=0 --batch_size=8
 
-train_config: launch/train_v3.yaml
+train_config: /home/acumino/vigil_ws/src/deps/lerobot_phd/launch/train_v3.yaml
 work_dir: /home/acumino/vigil_ws
 
 jobs:
@@ -51,37 +51,67 @@ jobs:
   #   policy_repo: RAPOB/dep_act_cup_green_no_aria_25ep
 
   # ============================================================
+  # HARD CUTOUT ARIA variants (robot cameras + aria_hard_cutout)
+  # ============================================================
+
+  # --- POD (Stage 1) ---
+  - dataset: RAPOB/dep_coffee_pod_gold_hard_cutout
+    output: dep_pod_gold_hard_cutout_40ep
+    policy_repo: RAPOB/dep_act_pod_gold_hard_cutout_40ep
+
+  - dataset: RAPOB/dep_coffee_pod_red_hard_cutout
+    output: dep_pod_red_hard_cutout_30ep
+    policy_repo: RAPOB/dep_act_pod_red_hard_cutout_30ep
+
+  - dataset: RAPOB/dep_coffee_pod_green_hard_cutout
+    output: dep_pod_green_hard_cutout_25ep
+    policy_repo: RAPOB/dep_act_pod_green_hard_cutout_25ep
+
+  # --- CUP (Stage 2) ---
+  - dataset: RAPOB/dep_coffee_cup_blue_hard_cutout
+    output: dep_cup_blue_hard_cutout_30ep
+    policy_repo: RAPOB/dep_act_cup_blue_hard_cutout_30ep
+
+  - dataset: RAPOB/dep_coffee_cup_red_hard_cutout
+    output: dep_cup_red_hard_cutout_20ep
+    policy_repo: RAPOB/dep_act_cup_red_hard_cutout_20ep
+
+  - dataset: RAPOB/dep_coffee_cup_green_hard_cutout
+    output: dep_cup_green_hard_cutout_25ep
+    policy_repo: RAPOB/dep_act_cup_green_hard_cutout_25ep
+
+  # ============================================================
   # Scene Classifiers (long run -- 50 epochs each)
   # ============================================================
 
-  - output: dep_classifier_pod_50ep
-    command: >-
-      bash -c "source /opt/lerobot_venv/bin/activate &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      train --which pod --epochs 50 --batch-size 64 &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      upload --which pod"
+  # - output: dep_classifier_pod_50ep
+  #   command: >-
+  #     bash -c "source /opt/lerobot_venv/bin/activate &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     train --which pod --epochs 50 --batch-size 64 &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     upload --which pod"
 
-  - output: dep_classifier_cup_50ep
-    command: >-
-      bash -c "source /opt/lerobot_venv/bin/activate &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      train --which cup --epochs 50 --batch-size 64 &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      upload --which cup"
+  # - output: dep_classifier_cup_50ep
+  #   command: >-
+  #     bash -c "source /opt/lerobot_venv/bin/activate &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     train --which cup --epochs 50 --batch-size 64 &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     upload --which cup"
 
-  - output: dep_classifier_pod_20ep
-    command: >-
-      bash -c "source /opt/lerobot_venv/bin/activate &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      train --which pod --epochs 20 --batch-size 64 &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      upload --which pod"
+  # - output: dep_classifier_pod_20ep
+  #   command: >-
+  #     bash -c "source /opt/lerobot_venv/bin/activate &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     train --which pod --epochs 20 --batch-size 64 &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     upload --which pod"
 
-  - output: dep_classifier_cup_20ep
-    command: >-
-      bash -c "source /opt/lerobot_venv/bin/activate &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      train --which cup --epochs 20 --batch-size 64 &&
-      python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
-      upload --which cup"
+  # - output: dep_classifier_cup_20ep
+  #   command: >-
+  #     bash -c "source /opt/lerobot_venv/bin/activate &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     train --which cup --epochs 20 --batch-size 64 &&
+  #     python3 /home/acumino/vigil_ws/files/train_scene_classifier.py
+  #     upload --which cup"

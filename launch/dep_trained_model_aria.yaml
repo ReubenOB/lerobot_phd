@@ -1,0 +1,141 @@
+# DEP Orchestrator — Mode 2: Trained Model (Full DEP Level 3)
+# ============================================================
+#
+# Classifier picks the object variant → loads that variant's trained
+# ACT policy and runs closed-loop inference. Full DEP pipeline.
+#
+# Flow:
+#   1. IDLE → operator looks RIGHT → classifier runs on aria_hard_cutout
+#   2. Classifier identifies pod color (gold/red/green)
+#   3. Specialist ACT policy for that pod color is loaded and run
+#   4. Eyes closed → advance to CUP stage → IDLE
+#   5. Operator looks RIGHT → classifier identifies cup color (blue/red/green)
+#   6. Specialist ACT policy for that cup color is loaded and run
+#   7. Eyes closed → COMPLETE
+#
+# Usage:
+#   python -m lerobot.async_inference.sync_orchestrator \
+#       --config_path=launch/dep_trained_model.yaml
+
+# ============================================================================
+# Robot Configuration (BIMANUAL SO101)
+# ============================================================================
+robot:
+  type: bi_so101_follower
+  prismatic_gripper: true
+  left_arm_id: ARM_0
+  right_arm_id: ARM_1
+  left_arm_port: /dev/ttyACM_left_follower
+  right_arm_port: /dev/ttyACM_right_follower
+  cameras:
+    top:
+      type: ros2
+      topic_name: /camera/top/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_0:
+      type: ros2
+      topic_name: /camera/wrist_0/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    wrist_1:
+      type: ros2
+      topic_name: /camera/wrist_1/image_raw
+      width: 640
+      height: 480
+      fps: 30
+    aria_hard_cutout:
+      type: ros2
+      topic_name: /aria/eye_gaze/hard_cutout
+      width: 640
+      height: 480
+      fps: 30
+
+# ============================================================================
+# Selection Mode
+# ============================================================================
+selection_mode: trained_model
+
+# ============================================================================
+# Classifier
+# ============================================================================
+classifier:
+  enabled: true
+  pod_checkpoint: "/home/acumino/vigil_ws/outputs/scene_classifier/pod/best_model.pth"
+  cup_checkpoint: "/home/acumino/vigil_ws/outputs/scene_classifier/cup/best_model.pth"
+  pod_classes: [gold, red, green]
+  cup_classes: [blue, red, green]
+  camera_key: "observation.images.aria_hard_cutout"
+  device: cuda
+  min_confidence: 0.7
+  num_frames_to_average: 5
+  classification_timeout_s: 10.0
+
+# ============================================================================
+# Model Maps (variant → pretrained ACT policy)
+# ============================================================================
+pod_models:
+  gold:
+    pretrained_path: "RAPOB/dep_act_pod_gold_hard_cutout_40ep"
+    task: "Pick up the gold coffee pod"
+  red:
+    pretrained_path: "RAPOB/dep_act_pod_red_hard_cutout_30ep"
+    task: "Pick up the red coffee pod"
+  green:
+    pretrained_path: "RAPOB/dep_act_pod_green_hard_cutout_25ep"
+    task: "Pick up the green coffee pod"
+
+cup_models:
+  blue:
+    pretrained_path: "RAPOB/dep_act_cup_blue_hard_cutout_30ep"
+    task: "Pick up the blue cup and make coffee"
+  red:
+    pretrained_path: "RAPOB/dep_act_cup_red_hard_cutout_20ep"
+    task: "Pick up the red cup and make coffee"
+  green:
+    pretrained_path: "RAPOB/dep_act_cup_green_hard_cutout_25ep"
+    task: "Pick up the green cup and make coffee"
+
+# No static policies needed (loaded dynamically by classifier)
+policies: []
+
+# ============================================================================
+# Control Loop
+# ============================================================================
+fps: 30
+buffer_max_frames: 3000
+
+# ============================================================================
+# Orchestrator Settings
+# ============================================================================
+orchestrator:
+  num_episodes: 1
+  max_episode_time_s: 300.0
+  transition_delay_s: 2.0
+  reset_playback_speed: 1.0
+  rewind_seconds: 8.0
+  use_amp: true
+
+  aria:
+    enabled: true
+    gaze_topic: "/aria/gaze_gesture/detected"
+    eyes_closed_topic: "/aria/blink/eyes_closed_detected"
+    double_blink_topic: "/aria/blink/double_detected"
+
+  rosbag:
+    enabled: false
+    output_dir: "/home/acumino/vigil_ws/outputs/rosbags"
+    storage: "mcap"
+    compression: false
+    upload_to_hub: false
+    repo_id: "RAPOB/dep_eval_rosbags"
+    private: true
+    topics:
+      - /camera/top/image_raw
+      - /camera/wrist_0/image_raw
+      - /camera/wrist_1/image_raw
+      - /aria/eye_gaze/hard_cutout
+      - /aria/eye_tracking/image_raw
+      - /joint_states

@@ -9,7 +9,7 @@
     "shoulder_lift": {
         "id": 2,
         "drive_mode": 0,
-        "homing_offset": -717,
+        "homing_offset": -716,
         "range_min": 898,
         "range_max": 3295
     },

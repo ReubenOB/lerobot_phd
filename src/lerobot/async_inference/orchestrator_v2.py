@@ -31,7 +31,10 @@ import draccus
 
 # Import camera configs to register them with draccus
 from lerobot.cameras.opencv.configuration_opencv import OpenCVCameraConfig  # noqa: F401
-from lerobot.cameras.ros2.configuration_ros2 import ROS2CameraConfig  # noqa: F401
+try:
+    from lerobot.cameras.ros2.configuration_ros2 import ROS2CameraConfig  # noqa: F401
+except ImportError:
+    pass  # ROS2 not available (e.g. running outside container without cv_bridge)
 from lerobot.robots import RobotConfig
 from lerobot.robots.bi_so101_follower import BiSO101FollowerConfig  # noqa: F401
 

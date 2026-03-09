@@ -32,12 +32,12 @@ robot:
       width: 640
       height: 480
       fps: 30
-    aria_hard_cutout:
-      type: ros2
-      topic_name: /aria/eye_gaze/hard_cutout
-      width: 640
-      height: 480
-      fps: 30
+    # aria_hard_cutout:
+    #   type: ros2
+    #   topic_name: /aria/eye_gaze/hard_cutout
+    #   width: 640
+    #   height: 480
+    #   fps: 30
 
 teleop:
   type: bi_so101_leader
@@ -53,9 +53,9 @@ teleop:
 dataset:
   single_task: "hard_cutout"  # Task description
   episode_time_s: 200
-  reset_time_s: 5
+  reset_time_s: 20
   private: true
-  push_to_hub: true
+  push_to_hub: false
 
 display_data: false
 

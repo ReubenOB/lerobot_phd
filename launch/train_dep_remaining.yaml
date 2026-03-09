@@ -1,0 +1,23 @@
+# DEP hard_cutout training -- remaining jobs (5 & 6 of original 6)
+#
+# Jobs 1-4 completed:
+#   pod_gold (40ep), pod_red (30ep), pod_green (25ep), cup_blue (30ep)
+#
+# Jobs 5-6 stopped at step ~400 (before first checkpoint), restart from scratch.
+#
+# Usage (inside container):
+#   source /opt/lerobot_venv/bin/activate
+#   cd /home/acumino/vigil_ws/src/deps/lerobot_phd
+#   python scripts/queue_training.py --config launch/train_dep_remaining.yaml
+
+train_config: /home/acumino/vigil_ws/src/deps/lerobot_phd/launch/train_v3.yaml
+work_dir: /home/acumino/vigil_ws
+
+jobs:
+  - dataset: RAPOB/dep_coffee_cup_red_hard_cutout
+    output: dep_cup_red_hard_cutout_20ep
+    policy_repo: RAPOB/dep_act_cup_red_hard_cutout_20ep
+
+  - dataset: RAPOB/dep_coffee_cup_green_hard_cutout
+    output: dep_cup_green_hard_cutout_25ep
+    policy_repo: RAPOB/dep_act_cup_green_hard_cutout_25ep

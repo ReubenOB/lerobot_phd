@@ -164,14 +164,14 @@ orchestrator:
   # Bags saved to output_dir with auto-generated timestamped names.
   rosbag:
     enabled: true
-    output_dir: "/home/acumino/Projects/PHD/vigil_ws/outputs/rosbags"
+    output_dir: "/home/acumino/vigil_ws/outputs/rosbags"
     storage: "mcap"                              # mcap or sqlite3
     # Compression settings
     compression: false                            # Enable/disable compression
     compression_mode: "file"                     # 'file' or 'message'
     compression_format: "zstd"                   # 'zstd', 'lz4', etc.
     # Upload completed bags to HuggingFace Hub
-    upload_to_hub: true
+    upload_to_hub: false
     repo_id: "RAPOB/sync_eval_rosbags_new_pc"
     private: true
     # Topics to record (robot cameras + Aria gaze + joint states)

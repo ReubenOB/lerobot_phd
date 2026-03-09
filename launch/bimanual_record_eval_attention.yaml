@@ -51,7 +51,7 @@ teleop:
 # Policy is specified via CLI: --policy.path="RAPOB/your_trained_policy"
 
 dataset:
-  single_task: "gaussian_attention"  # Task description
+  single_task: "eval_gaussian_attention_video"  # Task description
   episode_time_s: 200
   reset_time_s: 20
   private: true

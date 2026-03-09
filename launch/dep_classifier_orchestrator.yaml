@@ -189,7 +189,7 @@ orchestrator:
   # === Rosbag Recording ===
   rosbag:
     enabled: true
-    output_dir: "/home/acumino/Projects/PHD/vigil_ws/outputs/rosbags"
+    output_dir: "/home/acumino/vigil_ws/outputs/rosbags"
     storage: "mcap"
     compression: false
     upload_to_hub: true
